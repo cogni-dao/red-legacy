@@ -27,8 +27,8 @@ docker build --target runner -t cogni-node-template:local .
 - `docs/guides/contribute-knowledge.md` — when reusable findings should become durable node knowledge.
 - `docs/guides/htb-fullpwn-vpn-macos.md` — connect a Mac to an HTB CTF Fullpwn network and
   diagnose competing-VPN routes.
-- `docs/case-studies/fullpwn-sqli-to-system.md` — sanitized evidence-led case study from web SQL
-  injection through Windows SYSTEM.
+- `docs/case-studies/htb-fullpwn-training-examples.md` — sanitized evidence-led examples spanning
+  Windows SQL injection, BGP traffic interception, unsafe Python deserialization, and host root.
 
 ## Conductor workspaces
 
