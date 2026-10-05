@@ -1,0 +1,172 @@
+From 5f0b30a6dfc65fdcf0829b361ad0e91a5ee9bd73 Mon Sep 17 00:00:00 2001
+From: derekg1729 <derekgranito@gmail.com>
+Date: Wed, 17 Jun 2026 16:25:55 -0700
+Subject: [PATCH] =?UTF-8?q?feat(knowledge):=20adopt=20DELETE=5FIS=5FCLEAN?=
+ =?UTF-8?q?=20=E2=80=94=20delete=20op,=20not=20soft-deprecate?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Port of Cogni-DAO/cogni#1730 — delete op, not soft-deprecate (DELETE_IS_CLEAN).
+---
+ packages/knowledge-base/src/schema.ts         |  2 +-
+ .../adapters/doltgres/contribution-adapter.ts | 26 +++++++++++++++++--
+ .../src/domain/contribution-schemas.ts        |  2 +-
+ .../src/port/knowledge-store.port.ts          |  7 ++++-
+ .../src/service/contribution-service.ts       |  2 +-
+ .../tests/contribution-service.test.ts        | 12 ++++-----
+ 6 files changed, 39 insertions(+), 12 deletions(-)
+
+diff --git a/packages/knowledge-base/src/schema.ts b/packages/knowledge-base/src/schema.ts
+index fbe0a29e..60fd7610 100644
+--- a/packages/knowledge-base/src/schema.ts
++++ b/packages/knowledge-base/src/schema.ts
+@@ -13,7 +13,7 @@
+  *   - DOLT_IS_SOURCE_OF_TRUTH (knowledge-syntropy): all knowledge data lives here. Postgres search index is derived and rebuildable.
+  *   - ENTRY_HAS_PROVENANCE: every `knowledge` row has `source_type` + `source_ref`.
+  *   - ENTRY_HAS_DOMAIN: every `knowledge` row's `domain` matches a registered row in `domains`.
+- *   - DEPRECATE_NOT_DELETE: superseded entries get `status='deprecated'` + a `citations` row of type `supersedes`. Never DELETE.
++ *   - DELETE_IS_CLEAN: dead/retired knowledge is DELETEd (Dolt history preserves content + commits + attribution); supersession is refine-in-place. `status='deprecated'` retained only for the EDO temporal hypothesis lifecycle.
+  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
+  *   - No FK references to Postgres tables (different database server).
+  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
+diff --git a/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts b/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+index 82d0aea0..7131f913 100644
+--- a/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
++++ b/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+@@ -452,10 +452,32 @@ async function applyEdit(input: {
+   const { conn, mainSql, contributionId, principal, seq, edit } = input;
+   const ref = sourceRef(contributionId, seq);
+   const sourceNode = principal.id;
+-  if (edit.op === "deprecate") {
++  if (edit.op === "delete") {
++    // DELETE_IS_CLEAN: dead knowledge is removed from the live table, not
++    // soft-flagged. Dolt's version history preserves the row's content, every
++    // commit, and the contributor chain — the log IS the tombstone (audit +
++    // attribution survive). The delete itself is attributed via the
++    // surrounding contribution commit (principal + source_ref).
+     await assertKnowledgeRowExists(conn, edit.targetRowId);
++    // DAG safety: refuse if a live row cites this one — deleting would dangle
++    // that inbound edge. Repoint/remove those citations first, or refine the
++    // target in place instead of deleting.
++    const inbound = (await conn.unsafe(
++      `SELECT citing_id FROM citations WHERE cited_id = ${escapeValue(edit.targetRowId)} LIMIT 5`
++    )) as Array<{ citing_id: string }>;
++    if (inbound.length > 0) {
++      const citers = inbound.map((r) => r.citing_id).join(", ");
++      throw new ContributionConflictError(
++        `cannot delete '${edit.targetRowId}': cited by ${citers}. Remove or repoint those edges first, or refine the entry in place.`
++      );
++    }
++    // Cascade the dead entry's OWN outbound edges (its claims about others),
++    // then the row. Inbound is guaranteed empty by the guard above.
++    await conn.unsafe(
++      `DELETE FROM citations WHERE citing_id = ${escapeValue(edit.targetRowId)}`
++    );
+     await conn.unsafe(
+-      `UPDATE knowledge SET status = ${escapeValue("deprecated")}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
++      `DELETE FROM knowledge WHERE id = ${escapeValue(edit.targetRowId)}`
+     );
+     return;
+   }
+diff --git a/packages/knowledge-store/src/domain/contribution-schemas.ts b/packages/knowledge-store/src/domain/contribution-schemas.ts
+index 29a266a7..7b118cbb 100644
+--- a/packages/knowledge-store/src/domain/contribution-schemas.ts
++++ b/packages/knowledge-store/src/domain/contribution-schemas.ts
+@@ -65,7 +65,7 @@ export const KnowledgeContributionEditSchema = z
+       entry: KnowledgeEntryInputSchema,
+     }),
+     z.object({
+-      op: z.literal("deprecate"),
++      op: z.literal("delete"),
+       targetRowId: z.string().min(1).max(256),
+       reason: z.string().min(1).max(512),
+     }),
+diff --git a/packages/knowledge-store/src/port/knowledge-store.port.ts b/packages/knowledge-store/src/port/knowledge-store.port.ts
+index 54f7ffe5..2786e96d 100644
+--- a/packages/knowledge-store/src/port/knowledge-store.port.ts
++++ b/packages/knowledge-store/src/port/knowledge-store.port.ts
+@@ -178,7 +178,12 @@ export interface KnowledgeStorePort {
+     id: string,
+     update: Partial<NewKnowledge>
+   ): Promise<Knowledge>;
+-  /** Admin/cleanup only; agents use DEPRECATE_NOT_DELETE. */
++  /**
++   * Hard-delete a row. DELETE_IS_CLEAN — dead knowledge leaves the live table;
++   * Dolt version history preserves content + commits + contributor chain. The
++   * contribution `delete` op is the attributed agent path; this is the raw
++   * primitive. Callers must clear inbound citations first (else the DAG dangles).
++   */
+   deleteKnowledge(id: string): Promise<void>;
+ 
+   // --- Read — knowledge identity (knowledge-syntropy: CITATION_TARGET_EXISTS_AT_WRITE) ---
+diff --git a/packages/knowledge-store/src/service/contribution-service.ts b/packages/knowledge-store/src/service/contribution-service.ts
+index baecf085..1a561a0a 100644
+--- a/packages/knowledge-store/src/service/contribution-service.ts
++++ b/packages/knowledge-store/src/service/contribution-service.ts
+@@ -154,7 +154,7 @@ export function createContributionService(
+     for (const edit of edits) {
+       // deprecate + cite carry no knowledge-entry content to gate — a cite is
+       // a typed edge between existing rows. Pass them through untouched.
+-      if (edit.op === "deprecate" || edit.op === "cite") {
++      if (edit.op === "delete" || edit.op === "cite") {
+         out.push(edit);
+         continue;
+       }
+diff --git a/packages/knowledge-store/tests/contribution-service.test.ts b/packages/knowledge-store/tests/contribution-service.test.ts
+index 004b4f18..8acc3e71 100644
+--- a/packages/knowledge-store/tests/contribution-service.test.ts
++++ b/packages/knowledge-store/tests/contribution-service.test.ts
+@@ -397,7 +397,7 @@ describe("createContributionService", () => {
+     }
+   });
+ 
+-  it("forwards deprecate edits without running gates against them", async () => {
++  it("forwards delete edits without running gates against them", async () => {
+     const port = new FakeContributionPort();
+     port.records = [contribution()];
+     const service = createContributionService({
+@@ -407,14 +407,14 @@ describe("createContributionService", () => {
+       gates: [shapeGate],
+     });
+     const edit: KnowledgeContributionEdit = {
+-      op: "deprecate",
++      op: "delete",
+       targetRowId: "operator:knowledge:stale",
+       reason: "superseded",
+     };
+     await service.appendCommit({
+       principal: agent,
+       contributionId: "contrib-agent-1-abc123",
+-      body: { message: "deprecate test", edits: [edit] },
++      body: { message: "delete test", edits: [edit] },
+     });
+     expect(port.lastAppend?.edits).toEqual([edit]);
+   });
+@@ -454,7 +454,7 @@ describe("createContributionService", () => {
+       rateLimit: { maxOpenPerPrincipal: 5 },
+     });
+     const edit: KnowledgeContributionEdit = {
+-      op: "deprecate",
++      op: "delete",
+       targetRowId: "operator:knowledge:stale",
+       reason: "superseded by contribution branch revision",
+     };
+@@ -462,7 +462,7 @@ describe("createContributionService", () => {
+     await service.appendCommit({
+       principal: agent,
+       contributionId: "contrib-agent-1-abc123",
+-      body: { message: "deprecate stale row", edits: [edit] },
++      body: { message: "delete stale row", edits: [edit] },
+     });
+ 
+     expect(port.lastAppend?.contributionId).toBe("contrib-agent-1-abc123");
+@@ -486,7 +486,7 @@ describe("createContributionService", () => {
+           message: "not mine",
+           edits: [
+             {
+-              op: "deprecate",
++              op: "delete",
+               targetRowId: "operator:knowledge:stale",
+               reason: "not mine",
+             },

@@ -1,0 +1,1109 @@
+From a194d971fa2858925a74ffabcc3a71cf4a53a4c5 Mon Sep 17 00:00:00 2001
+From: Derek <derekgranito@gmail.com>
+Date: Fri, 19 Jun 2026 05:27:25 -0400
+Subject: [PATCH 1/3] feat(skills): add logs read-path skill for node devs
+ (#46)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+* feat(skills): add logs read-path skill for node devs
+
+Ships a developer-facing /logs skill so every wizard-born node knows the
+read path for its own logs: the operator observability proxy endpoint,
+how to get a developer grant, example LogQL queries, how to read the JSON,
+and the own-node app-only scope limit (shared infra is operator-only).
+
+* docs(skills): logs.md — node_id is its own field, not intent.name; use COGNI_API_KEY
+---
+ .claude/commands/logs.md | 55 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+ create mode 100644 .claude/commands/logs.md
+
+diff --git a/.claude/commands/logs.md b/.claude/commands/logs.md
+new file mode 100644
+index 00000000..b3ea28ee
+--- /dev/null
++++ b/.claude/commands/logs.md
+@@ -0,0 +1,55 @@
++---
++description: Read your own node's logs through the operator proxy.
++---
++
++You read your node's logs through one operator endpoint, using your Cogni API key. You never touch Grafana or kube — the operator holds the Loki token and scopes every query to your node.
++
++## The endpoint
++
++```bash
++curl -G "https://cognidao.org/api/v1/nodes/<node>/observability/logs" \
++  -H "authorization: Bearer $COGNI_API_KEY" \
++  --data-urlencode "env=candidate-a" \
++  --data-urlencode 'query={service="app"} | json | level="error"'
++```
++
++- `<node>` — your node `slug` (= `.cogni/repo-spec.yaml` `intent.name`) or its `node_id` (the `node_id` field in the same file).
++- `env` — `candidate-a`, `preview`, or `production`.
++- `query` — full LogQL, URL-encoded. Same query you'd write directly against Loki.
++- Empty `query` → your node's `app` stream (everything the node app emitted).
++
++The operator **forces** `env`/`service`/`node` to your node and rejects out-of-scope selectors with a `400`. You can only ever see your own node — there is no way to read another node or shared infra through this path.
++
++## Get a `developer` grant first
++
++Reading logs needs a `developer` grant on the node. Request it; the owner approves:
++
++```bash
++curl -X POST "https://cognidao.org/api/v1/nodes/<node>/access-requests" \
++  -H "authorization: Bearer $COGNI_API_KEY" \
++  -H 'content-type: application/json' \
++  -d '{"role":"developer"}'
++```
++
++Until approved, the logs endpoint returns `403 authz_denied`.
++
++## Example queries
++
++URL-encode the `query` value (`--data-urlencode` does this for you).
++
++- **All errors:** `{service="app"} | json | level="error"`
++- **Trace one request by reqId:** `{service="app"} | json | reqId="<req-id>"`
++- **A domain event by name:** `{service="app"} | json | event="<event.name>"`
++- **Free-text grep:** `{service="app"} |= "timeout"`
++
++## Reading the result
++
++Results are raw Loki JSON lines — each entry is one structured log the node app emitted. Useful fields: `level`, `event`, `reqId`, `nodeId`, `msg`, `time`. Your node already stamps `nodeId` (the repo-spec `node_id`) on every line — you configure nothing; the operator + env substrate handle scoping.
++
++## Scope limit
++
++This path serves only your node's **`app`** logs. Shared infra (operator, scheduler-worker, ingress, the database) is **operator-only** and not visible here. If you suspect a problem in shared infra, escalate with a bug:
++
++```bash
++POST https://cognidao.org/api/v1/work/items {type:"bug", node:"operator"}
++```
+
+From 199205baeee79595520df6de0c29f0a583e2514d Mon Sep 17 00:00:00 2001
+From: Derek <derekgranito@gmail.com>
+Date: Fri, 19 Jun 2026 12:57:52 -0400
+Subject: [PATCH 2/3] feat(knowledge): unblock bearer-agent reads (port
+ operator #1461 + extend to graph/domains) (#49)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Browse routes 403'd every bearer-token request even though getSessionUser is
+bearer-first and the knowledge.list contract already declares
+KNOWLEDGE_READ_REQUIRES_PRINCIPAL. Agents could WRITE contributions but never
+READ the plane they wrote to.
+
+Operator fixed this in #1461 for list + [id]; node-template never got the port,
+and operator never finished domains (still cookie-only) or graph (node-only feature).
+
+This removes the bearer-403 guard on all four read routes:
+- GET /knowledge (list)        — mirrors operator #1461
+- GET /knowledge/[id]          — mirrors operator #1461
+- GET /knowledge/graph         — node-only; agents can now pull citation links
+- GET /knowledge/domains (list) — extends past operator
+
+Invariant KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION -> KNOWLEDGE_READ_REQUIRES_PRINCIPAL
+(DOMAIN_LIST_COOKIE_ONLY -> DOMAIN_LIST_REQUIRES_PRINCIPAL). Human-UI fetchers
+stay cookie-only by construction. Adds a contract test proving bearer agents
+get 200 (not 403) on all four routes incl. graph edge link-pulling.
+
+Full-text search remains a gap (port exposes only list/get, no query).
+---
+ .../app/(app)/knowledge/_api/fetchGraph.ts    |   2 +-
+ .../(app)/knowledge/_api/fetchKnowledge.ts    |   2 +-
+ .../knowledge/_api/fetchKnowledgeEntry.ts     |   2 +-
+ app/src/app/api/v1/knowledge/[id]/route.ts    |  18 +-
+ .../app/api/v1/knowledge/domains/_handlers.ts |  31 ++--
+ app/src/app/api/v1/knowledge/domains/route.ts |   6 +-
+ app/src/app/api/v1/knowledge/graph/route.ts   |  21 +--
+ app/src/app/api/v1/knowledge/route.ts         |  18 +-
+ .../app/knowledge.read-principal.test.ts      | 154 ++++++++++++++++++
+ .../src/knowledge.domains.v1.contract.ts      |   7 +-
+ 10 files changed, 197 insertions(+), 64 deletions(-)
+ create mode 100644 app/tests/contract/app/knowledge.read-principal.test.ts
+
+diff --git a/app/src/app/(app)/knowledge/_api/fetchGraph.ts b/app/src/app/(app)/knowledge/_api/fetchGraph.ts
+index 0198cf24..3d345d7d 100644
+--- a/app/src/app/(app)/knowledge/_api/fetchGraph.ts
++++ b/app/src/app/(app)/knowledge/_api/fetchGraph.ts
+@@ -8,7 +8,7 @@
+  *   GET /api/v1/knowledge/graph (kept in-node, not @cogni/node-contracts, so
+  *   the graph feature stays single-node-scoped).
+  * Scope: Calls GET /api/v1/knowledge/graph with same-origin credentials.
+- * Invariants: Cookie-session only — never sends a Bearer header (per KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
++ * Invariants: Browser client — same-origin cookie credentials, never a Bearer header. The endpoint itself accepts any principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); this UI path is cookie-only by construction.
+  * Side-effects: IO
+  * @internal
+  */
+diff --git a/app/src/app/(app)/knowledge/_api/fetchKnowledge.ts b/app/src/app/(app)/knowledge/_api/fetchKnowledge.ts
+index 6797c99c..6e70fad6 100644
+--- a/app/src/app/(app)/knowledge/_api/fetchKnowledge.ts
++++ b/app/src/app/(app)/knowledge/_api/fetchKnowledge.ts
+@@ -5,7 +5,7 @@
+  * Module: `@app/(app)/knowledge/_api/fetchKnowledge`
+  * Purpose: Client-side fetch wrapper for the knowledge browse list.
+  * Scope: Calls GET /api/v1/knowledge with same-origin credentials. Returns typed response or throws.
+- * Invariants: Cookie-session only — never sends a Bearer header (per KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
++ * Invariants: Browser client — same-origin cookie credentials, never a Bearer header. The endpoint itself accepts any principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); this UI path is cookie-only by construction.
+  * Side-effects: IO
+  * @internal
+  */
+diff --git a/app/src/app/(app)/knowledge/_api/fetchKnowledgeEntry.ts b/app/src/app/(app)/knowledge/_api/fetchKnowledgeEntry.ts
+index 75f7a65c..5164e76b 100644
+--- a/app/src/app/(app)/knowledge/_api/fetchKnowledgeEntry.ts
++++ b/app/src/app/(app)/knowledge/_api/fetchKnowledgeEntry.ts
+@@ -5,7 +5,7 @@
+  * Module: `@app/(app)/knowledge/_api/fetchKnowledgeEntry`
+  * Purpose: Client-side fetch wrapper for a single knowledge entry (the permalink page).
+  * Scope: Calls GET /api/v1/knowledge/[id] with same-origin credentials. Returns typed row or throws.
+- * Invariants: Cookie-session only — never sends a Bearer header (per KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
++ * Invariants: Browser client — same-origin cookie credentials, never a Bearer header. The endpoint itself accepts any principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); this UI path is cookie-only by construction.
+  * Side-effects: IO
+  * @internal
+  */
+diff --git a/app/src/app/api/v1/knowledge/[id]/route.ts b/app/src/app/api/v1/knowledge/[id]/route.ts
+index 8ca74e9b..7ece3e40 100644
+--- a/app/src/app/api/v1/knowledge/[id]/route.ts
++++ b/app/src/app/api/v1/knowledge/[id]/route.ts
+@@ -5,9 +5,9 @@
+  * Module: `@app/api/v1/knowledge/[id]/route`
+  * Purpose: GET /api/v1/knowledge/[id] — fetch a single knowledge entry for the routable
+  *   full-page view (the permalink target humans click and AI emits).
+- * Scope: Cookie-session only (Bearer agents rejected with 403, mirroring the list route).
++ * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route.
+  *   Reads via container.knowledgeStorePort.getKnowledge.
+- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION.
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL.
+  * Side-effects: IO (HTTP response, Doltgres read via container port)
+  * Links: docs/spec/knowledge-syntropy.md
+  * @public
+@@ -29,19 +29,13 @@ export const GET = wrapRouteHandlerWithLogging<{
+     routeId: "knowledge.get",
+     auth: { mode: "required", getSessionUser },
+   },
+-  async (ctx, request, sessionUser, context) => {
++  async (ctx, _request, sessionUser, context) => {
+     if (!sessionUser) {
+       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+     }
+-    // Bearer-token agents must not browse the knowledge plane in v0
+-    // (KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION). Cookie-session users only.
+-    const authz = request.headers.get("authorization") ?? "";
+-    if (authz.toLowerCase().startsWith("bearer ")) {
+-      return NextResponse.json(
+-        { error: "knowledge browse requires a session cookie (v0)" },
+-        { status: 403 }
+-      );
+-    }
++    // Any authenticated principal may read (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
++    // Bearer agents recall merged entries just like the human browse UI;
++    // per-principal x402 metering for external readers remains future work.
+ 
+     const port = getContainer().knowledgeStorePort;
+     if (!port) {
+diff --git a/app/src/app/api/v1/knowledge/domains/_handlers.ts b/app/src/app/api/v1/knowledge/domains/_handlers.ts
+index ea9edcf1..16ba5dc3 100644
+--- a/app/src/app/api/v1/knowledge/domains/_handlers.ts
++++ b/app/src/app/api/v1/knowledge/domains/_handlers.ts
+@@ -5,12 +5,14 @@
+  * Module: `@app/api/v1/knowledge/domains/_handlers`
+  * Purpose: HTTP handlers for the knowledge domain registry — list and register, mapping typed errors to HTTP statuses.
+  * Scope: Operator-side wiring only. Does not contain business logic, validation, or storage I/O — those live in the port/adapter.
+- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_COOKIE_ONLY
+- *   (browse is a UI concern), DOMAIN_REGISTER_BEARER_OR_SESSION (federation:
+- *   external bearer agents may register a domain on-demand so that downstream
+- *   writes — knowledge contributions, EDO hypothesize/decide/record-outcome —
+- *   can proceed against the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant
+- *   without requiring a UI roundtrip).
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_REQUIRES_PRINCIPAL
++ *   (any authenticated principal — session human or bearer agent — may list
++ *   domains, mirroring KNOWLEDGE_READ_REQUIRES_PRINCIPAL on /knowledge),
++ *   DOMAIN_REGISTER_BEARER_OR_SESSION (federation: external bearer agents may
++ *   register a domain on-demand so that downstream writes — knowledge
++ *   contributions, EDO hypothesize/decide/record-outcome — can proceed against
++ *   the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant without requiring a UI
++ *   roundtrip).
+  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
+  * Links: docs/spec/knowledge-domain-registry.md, docs/spec/knowledge-syntropy.md
+  * @internal
+@@ -31,22 +33,15 @@ function port() {
+   return getContainer().knowledgeStorePort ?? null;
+ }
+ 
+-function isBearer(request: Request): boolean {
+-  const authz = request.headers.get("authorization") ?? "";
+-  return authz.toLowerCase().startsWith("bearer ");
+-}
+-
+ export async function handleList(
+-  request: Request,
++  _request: Request,
+   sessionUser: SessionUser | null
+ ): Promise<NextResponse> {
+   if (!sessionUser)
+     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+-  if (isBearer(request))
+-    return NextResponse.json(
+-      { error: "knowledge domains require a session cookie (v0)" },
+-      { status: 403 }
+-    );
++  // Any authenticated principal may list domains (DOMAIN_LIST_REQUIRES_PRINCIPAL).
++  // Bearer agents need the registry to recall + target writes, mirroring
++  // KNOWLEDGE_READ_REQUIRES_PRINCIPAL on /knowledge.
+   const p = port();
+   if (!p)
+     return NextResponse.json(
+@@ -66,8 +61,6 @@ export async function handleCreate(
+   // Bearer agents may register a domain on-demand to satisfy
+   // DOMAIN_FK_ENFORCED_AT_WRITE before downstream writes
+   // (knowledge contributions + EDO hypothesize/decide/record-outcome).
+-  // Touch via underscore so the linter doesn't warn.
+-  void isBearer(request);
+   const p = port();
+   if (!p)
+     return NextResponse.json(
+diff --git a/app/src/app/api/v1/knowledge/domains/route.ts b/app/src/app/api/v1/knowledge/domains/route.ts
+index bd7b2d54..f10292ca 100644
+--- a/app/src/app/api/v1/knowledge/domains/route.ts
++++ b/app/src/app/api/v1/knowledge/domains/route.ts
+@@ -4,9 +4,9 @@
+ /**
+  * Module: `@app/api/v1/knowledge/domains/route`
+  * Purpose: HTTP endpoints for the knowledge domain registry — GET list with entry counts and POST register a new domain.
+- * Scope: Cookie-session only. Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
+- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_COOKIE_ONLY,
+- *   DOMAIN_REGISTRY_VIA_UI, DOMAIN_REGISTER_AUTOCOMMITS.
++ * Scope: Any authenticated principal (cookie-session human OR bearer agent). Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_REQUIRES_PRINCIPAL
++ *   (list: any principal; register: bearer-or-session), DOMAIN_REGISTER_AUTOCOMMITS.
+  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
+  * Links: docs/spec/knowledge-domain-registry.md
+  * @public
+diff --git a/app/src/app/api/v1/knowledge/graph/route.ts b/app/src/app/api/v1/knowledge/graph/route.ts
+index 789b6b72..877f67aa 100644
+--- a/app/src/app/api/v1/knowledge/graph/route.ts
++++ b/app/src/app/api/v1/knowledge/graph/route.ts
+@@ -6,10 +6,11 @@
+  * Purpose: GET /api/v1/knowledge/graph — full node (entry) + edge (citation) set
+  *   for the 3D knowledge graph view. Reads every domain's entries plus each
+  *   entry's outgoing citations via container.knowledgeStorePort.
+- * Scope: Cookie-session only (Bearer agents rejected 403, like /knowledge).
++ * Scope: Any authenticated principal (cookie-session human OR bearer agent), like /knowledge.
+  *   Edges gathered from per-node outgoing citations — every citation has exactly
+- *   one citing node in the set, so this yields the complete edge list.
+- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION,
++ *   one citing node in the set, so this yields the complete edge list. Bearer
++ *   agents traverse the citation graph (link-pulling) just like the human 3D view.
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL,
+  *   EDGE_ENDPOINTS_EXIST (edges whose cited target isn't in the node set are dropped).
+  * Side-effects: IO (HTTP response, Doltgres reads via container port)
+  * Links: docs/spec/knowledge-syntropy.md
+@@ -52,19 +53,13 @@ export const GET = wrapRouteHandlerWithLogging(
+     routeId: "knowledge.graph",
+     auth: { mode: "required", getSessionUser },
+   },
+-  async (ctx, request, sessionUser) => {
++  async (ctx, _request, sessionUser) => {
+     if (!sessionUser) {
+       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+     }
+-    // Mirror /api/v1/knowledge: Bearer agents must not browse the knowledge
+-    // plane in v0 (KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
+-    const authz = request.headers.get("authorization") ?? "";
+-    if (authz.toLowerCase().startsWith("bearer ")) {
+-      return NextResponse.json(
+-        { error: "knowledge graph requires a session cookie (v0)" },
+-        { status: 403 }
+-      );
+-    }
++    // Any authenticated principal may read (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
++    // Mirror /api/v1/knowledge: bearer agents traverse the citation graph just
++    // like the human 3D view; per-principal x402 metering remains future work.
+ 
+     const port = getContainer().knowledgeStorePort;
+     if (!port) {
+diff --git a/app/src/app/api/v1/knowledge/route.ts b/app/src/app/api/v1/knowledge/route.ts
+index 2d00a34d..a85a2786 100644
+--- a/app/src/app/api/v1/knowledge/route.ts
++++ b/app/src/app/api/v1/knowledge/route.ts
+@@ -3,9 +3,9 @@
+ 
+ /**
+  * Module: `@app/api/v1/knowledge/route`
+- * Purpose: GET /api/v1/knowledge — list knowledge entries across all domains for the human browse UI.
+- * Scope: Cookie-session only (Bearer agents are rejected with 403). Reads via container.knowledgeStorePort: listDomains then per-domain listKnowledge.
+- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION.
++ * Purpose: GET /api/v1/knowledge — list knowledge entries across all domains for the human browse UI and external agent recall.
++ * Scope: Any authenticated principal (cookie-session human OR bearer agent). Reads via container.knowledgeStorePort: listDomains then per-domain listKnowledge.
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL.
+  * Side-effects: IO (HTTP response, Doltgres reads via container port)
+  * Links: docs/spec/knowledge-syntropy.md
+  * @public
+@@ -33,15 +33,9 @@ export const GET = wrapRouteHandlerWithLogging(
+     if (!sessionUser) {
+       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+     }
+-    // Bearer-token agents must not browse the knowledge plane in v0
+-    // (KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION). Cookie-session users only.
+-    const authz = request.headers.get("authorization") ?? "";
+-    if (authz.toLowerCase().startsWith("bearer ")) {
+-      return NextResponse.json(
+-        { error: "knowledge browse requires a session cookie (v0)" },
+-        { status: 403 }
+-      );
+-    }
++    // Any authenticated principal may read (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
++    // Bearer agents recall the merged plane just like the human browse UI;
++    // per-principal x402 metering for external readers remains future work.
+ 
+     const port = getContainer().knowledgeStorePort;
+     if (!port) {
+diff --git a/app/tests/contract/app/knowledge.read-principal.test.ts b/app/tests/contract/app/knowledge.read-principal.test.ts
+new file mode 100644
+index 00000000..07e0c54b
+--- /dev/null
++++ b/app/tests/contract/app/knowledge.read-principal.test.ts
+@@ -0,0 +1,154 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@tests/contract/app/knowledge.read-principal`
++ * Purpose: Lock in KNOWLEDGE_READ_REQUIRES_PRINCIPAL — bearer-token agents may
++ *   read the knowledge plane (list, single entry, citation graph, domain
++ *   registry) just like cookie-session humans. Regression guard for the v0
++ *   guard that 403'd every bearer browse request.
++ * Scope: Exercises the four GET read routes with an `Authorization: Bearer`
++ *   header against a seeded fake store. Does not test write/contribution paths.
++ * Invariants: a bearer-bearing read returns 200 (never 403); link-pulling
++ *   (graph edges) is reachable by agents.
++ * Side-effects: none (container + auth mocked, fake in-memory store)
++ * Links: src/app/api/v1/knowledge, docs/spec/knowledge-syntropy.md
++ * @internal
++ */
++
++import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
++import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
++import { testApiHandler } from "next-test-api-route-handler";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++// Fresh fake store per test (reassigned in beforeEach); the container mock
++// hands the current instance to every route. Lazy factory => reads latest value.
++let mockStore: FakeKnowledgeStoreAdapter;
++
++vi.mock("@/bootstrap/container", () => ({
++  getContainer: vi.fn(() => ({
++    log: {
++      child: vi.fn(() => ({
++        info: vi.fn(),
++        error: vi.fn(),
++        warn: vi.fn(),
++        debug: vi.fn(),
++      })),
++      info: vi.fn(),
++      error: vi.fn(),
++      warn: vi.fn(),
++      debug: vi.fn(),
++    },
++    clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
++    config: { unhandledErrorPolicy: "rethrow" },
++    knowledgeStorePort: mockStore,
++  })),
++}));
++
++// A resolved session user models a *successful bearer-token auth*: the real
++// resolveRequestIdentity returns a SessionUser for a valid `cogni_ag_sk_v1_`
++// token. We send a Bearer header on every request so the old guard — which
++// keyed off that header — would have returned 403.
++vi.mock("@/app/_lib/auth/session", () => ({
++  getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
++}));
++
++import * as listHandler from "@/app/api/v1/knowledge/route";
++import * as entryHandler from "@/app/api/v1/knowledge/[id]/route";
++import * as domainsHandler from "@/app/api/v1/knowledge/domains/route";
++import * as graphHandler from "@/app/api/v1/knowledge/graph/route";
++
++const BEARER = { authorization: "Bearer cogni_ag_sk_v1_test.signature" };
++
++async function seedStore(store: FakeKnowledgeStoreAdapter) {
++  await store.registerDomain({ id: "eng", name: "Engineering" });
++  await store.upsertKnowledge({
++    id: "entry-a",
++    domain: "eng",
++    title: "Entry A",
++    content: "alpha",
++    sourceType: "agent",
++  });
++  await store.upsertKnowledge({
++    id: "entry-b",
++    domain: "eng",
++    title: "Entry B",
++    content: "beta",
++    sourceType: "agent",
++  });
++  // Citation edge so the graph route proves agent link-pulling, not just nodes.
++  await store.addCitation({
++    citingId: "entry-a",
++    citedId: "entry-b",
++    citationType: "extends",
++  });
++}
++
++describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
++  beforeEach(async () => {
++    vi.clearAllMocks();
++    mockStore = new FakeKnowledgeStoreAdapter();
++    await seedStore(mockStore);
++  });
++
++  it("GET /knowledge returns 200 for a bearer agent (not 403)", async () => {
++    await testApiHandler({
++      appHandler: listHandler,
++      url: "/api/v1/knowledge",
++      async test({ fetch }) {
++        const res = await fetch({ method: "GET", headers: BEARER });
++        expect(res.status).toBe(200);
++        const body = await res.json();
++        expect(body.items).toHaveLength(2);
++        expect(body.domains).toContain("eng");
++      },
++    });
++  });
++
++  it("GET /knowledge/[id] returns 200 for a bearer agent (not 403)", async () => {
++    await testApiHandler({
++      appHandler: entryHandler,
++      params: { id: "entry-a" },
++      url: "/api/v1/knowledge/entry-a",
++      async test({ fetch }) {
++        const res = await fetch({ method: "GET", headers: BEARER });
++        expect(res.status).toBe(200);
++        const body = await res.json();
++        expect(body.id).toBe("entry-a");
++      },
++    });
++  });
++
++  it("GET /knowledge/graph returns 200 + edges for a bearer agent (link-pulling)", async () => {
++    await testApiHandler({
++      appHandler: graphHandler,
++      url: "/api/v1/knowledge/graph",
++      async test({ fetch }) {
++        const res = await fetch({ method: "GET", headers: BEARER });
++        expect(res.status).toBe(200);
++        const body = await res.json();
++        expect(body.nodes).toHaveLength(2);
++        expect(body.edges).toEqual([
++          expect.objectContaining({
++            source: "entry-a",
++            target: "entry-b",
++            citationType: "extends",
++          }),
++        ]);
++      },
++    });
++  });
++
++  it("GET /knowledge/domains returns 200 for a bearer agent (not 403)", async () => {
++    await testApiHandler({
++      appHandler: domainsHandler,
++      url: "/api/v1/knowledge/domains",
++      async test({ fetch }) {
++        const res = await fetch({ method: "GET", headers: BEARER });
++        expect(res.status).toBe(200);
++        const body = await res.json();
++        expect(body.domains.map((d: { id: string }) => d.id)).toContain("eng");
++      },
++    });
++  });
++});
+diff --git a/packages/node-contracts/src/knowledge.domains.v1.contract.ts b/packages/node-contracts/src/knowledge.domains.v1.contract.ts
+index 1b0a6f0b..e17d73d2 100644
+--- a/packages/node-contracts/src/knowledge.domains.v1.contract.ts
++++ b/packages/node-contracts/src/knowledge.domains.v1.contract.ts
+@@ -3,10 +3,13 @@
+ 
+ /**
+  * Module: `@contracts/knowledge.domains.v1.contract`
+- * Purpose: HTTP contract for the knowledge domain registry — GET list with entry counts and POST register (cookie-session only).
++ * Purpose: HTTP contract for the knowledge domain registry — GET list with entry counts and POST register.
+  * Scope: Zod schemas for the wire format. Does not contain business logic, I/O, or auth policy.
+  * Invariants:
+- *   - DOMAIN_HTTP_COOKIE_ONLY (route enforces; contract does not).
++ *   - DOMAIN_HTTP_REQUIRES_PRINCIPAL (route enforces, contract does not): GET list
++ *     accepts any authenticated principal — session human or bearer agent
++ *     (DOMAIN_LIST_REQUIRES_PRINCIPAL); POST register accepts bearer or session
++ *     (DOMAIN_REGISTER_BEARER_OR_SESSION).
+  *   - DOMAIN_REGISTRATION_IS_STICKY: no DELETE/PUT in v0.
+  *   - id is short, slug-shaped (alnum, dash, underscore).
+  * Side-effects: none
+
+From 83f1bcfb202a096655fd2a5ab4548a4a9bbf868a Mon Sep 17 00:00:00 2001
+From: Derek <derekgranito@gmail.com>
+Date: Fri, 19 Jun 2026 13:18:36 -0400
+Subject: [PATCH 3/3] =?UTF-8?q?feat(cognition):=20bring=20node-template=20?=
+ =?UTF-8?q?current=20with=20operator=20=E2=80=94=20mission=20+=20orientati?=
+ =?UTF-8?q?on=20(#48)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+* feat(cognition): node identity from repo-spec — intent.name + mission heading (sync-port hub #1701)
+
+Ports the node-identity surface from the operator hub (Cogni-DAO/cogni #1701)
+that never reached node-template: forks inherited the cognition feature but not
+the intent.mission heading, so every wizard-spawned node rendered the old
+'Cogni `<uuid>` — Session Cognition' header with no mission.
+
+- repo-spec schema: optional intent { name, mission } block
+- accessors: extractNodeName (intent.name → node_id fallback) + extractNodeMission
+- cognition contract: name + mission on the bundle response
+- shared/config: getNodeName / getNodeMission
+- cognition route + _bundle: render '<name> — Cogni Session Cognition' with a
+  mission · skills · domains · loaded subtitle (matches the hub bundle)
+- .cogni/repo-spec.yaml: a generic placeholder mission + forker guidance to
+  replace it (the node's one-line identity, surfaced at session start)
+- accessor unit coverage mirrored from the hub
+
+Loader (scripts/agent/session-cognition.sh) intentionally NOT touched —
+node-template's two-account variant already self-resolves the node URL.
+
+* feat(cognition): orientation excerpt — port operator #1718 + #1735
+
+Brings node-template's cognition bundle fully current with operator main:
+the bundle now surfaces a bounded (<=480 char) current-node orientation
+excerpt from the <slug>-agent-orientation knowledge entry (node-specific
+wins over the inherited cogni-agent-orientation seed), with a 'seed one'
+fallback when absent. Also adopts #1735's tightened invariants/recall text
+and empty-domain suppression.
+
+Files:
+- app/.../cognition/_bundle.ts: OrientationExcerpt + excerptFromContent +
+  render block + #1735 text (tabs, matching node-template style)
+- app/.../cognition/route.ts: resolve <slug>-agent-orientation during the
+  domain scan, fetch its excerpt via knowledgeStorePort.getKnowledge
+- packages/knowledge-base/src/seeds/base.ts: cogni-agent-orientation seed
+
+Now layered on the mission port already in this PR; merged current main (#49).
+Skipped #1718's scaffold-gen/adapter hunks (node-formation, not bundle-read).
+---
+ .cogni/repo-spec.yaml                         |  4 +
+ app/src/app/api/v1/cognition/_bundle.ts       | 91 +++++++++++++++++--
+ app/src/app/api/v1/cognition/route.ts         | 49 +++++++++-
+ app/src/shared/config/index.ts                |  2 +
+ app/src/shared/config/repoSpec.server.ts      | 16 ++++
+ .../unit/packages/repo-spec/accessors.test.ts | 33 +++++++
+ packages/knowledge-base/src/seeds/base.ts     | 23 +++++
+ .../src/cognition.v1.contract.ts              |  5 +
+ packages/repo-spec/src/accessors.ts           | 13 +++
+ packages/repo-spec/src/index.ts               |  2 +
+ packages/repo-spec/src/schema.ts              | 13 +++
+ 11 files changed, 240 insertions(+), 11 deletions(-)
+
+diff --git a/.cogni/repo-spec.yaml b/.cogni/repo-spec.yaml
+index 67309b93..e69ef76a 100644
+--- a/.cogni/repo-spec.yaml
++++ b/.cogni/repo-spec.yaml
+@@ -15,6 +15,10 @@ scope_key: "default"
+ 
+ intent:
+   name: node-template
++  # `mission` is your node's one-line identity — surfaced at the top of every
++  # agent's session cognition (the node's reason to exist). Forkers: replace the
++  # default below with your node's actual mission (what it does + why it matters).
++  mission: "A Cogni node — a web3-governed, AI-powered organization with its own mission, built on the shared operator substrate."
+ 
+ cogni_dao:
+   chain_id: "8453" # Base mainnet
+diff --git a/app/src/app/api/v1/cognition/_bundle.ts b/app/src/app/api/v1/cognition/_bundle.ts
+index 0dfdea93..01e8d4cf 100644
+--- a/app/src/app/api/v1/cognition/_bundle.ts
++++ b/app/src/app/api/v1/cognition/_bundle.ts
+@@ -10,8 +10,10 @@
+  * Invariants:
+  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: the constant is the one piece of
+  *     cognition that must render even when the hub is empty/unreachable.
+- *   - INDEX_NOT_CONTENT: renders pointers (id + title + recall path), not
+- *     entry bodies or excerpts.
++ *   - INDEX_FIRST: renders pointers (id + title + recall path), never full entry
++ *     bodies. The ONE bounded exception is a single current-node orientation
++ *     excerpt (the map an agent needs to start, not just the constitution) —
++ *     capped at ORIENTATION_EXCERPT_MAX chars, one entry, never a full body.
+  * Side-effects: none
+  * Links: docs/spec/node-baas-architecture.md
+  * @internal
+@@ -36,6 +38,7 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
+ 	"Definition of Done = merged AND validated on candidate-a: flight the PR, exercise the changed surface against the live deployed URL, read your own request back from Loki at the deployed SHA, then post a /validate-candidate scorecard on the PR. The posted scorecard IS the validation signal — not a work-item flag to flip.",
+ 	"Clean architecture: strict typing (no `any`), Zod boundaries, hexagonal layering, Pino→Loki observability, idempotent ops. Purge legacy — no backwards-compat shims unless the user asks.",
+ 	"Durable learning refines back into the knowledge hub (rare, recall→refine over write-new), never inline comments or docs sprawl.",
++	"A new knowledge entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands.",
+ ];
+ 
+ const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
+@@ -57,13 +60,46 @@ export function escapeCell(value: string | null | undefined): string {
+ 		.trim();
+ }
+ 
++/** Max length of the bounded orientation excerpt (INDEX_FIRST carve-out). */
++export const ORIENTATION_EXCERPT_MAX = 480;
++
++/** A single current-node orientation entry surfaced as a bounded excerpt. */
++export interface OrientationExcerpt {
++	id: string;
++	excerpt: string;
++}
++
++/**
++ * Bounded first-section excerpt of an orientation entry body — the agent's
++ * map, not a docs dump. Takes the leading paragraph, flattens whitespace, and
++ * caps length so the bundle stays INDEX_FIRST.
++ */
++export function excerptFromContent(
++	content: string,
++	maxChars: number = ORIENTATION_EXCERPT_MAX,
++): string {
++	const firstBlock =
++		content
++			.trim()
++			.split(/\n{2,}/)[0]
++			?.trim() ?? "";
++	const flat = firstBlock.replace(/\s*\r?\n\s*/g, " ").trim();
++	if (flat.length <= maxChars) return flat;
++	return `${flat.slice(0, maxChars).trimEnd()}…`;
++}
++
+ export interface RenderBundleInput {
+ 	node: string;
++	name: string;
++	mission: string | null;
++	generatedAt: string;
+ 	origin: string;
+ 	buildSha: string;
+ 	toolingInvariants: readonly string[];
+ 	skillsIndex: readonly CognitionSkillPointer[];
+ 	domainPointers: readonly CognitionDomainPointer[];
++	/** The current node's `<slug>-agent-orientation` excerpt, or null if unseeded. */
++	orientation: OrientationExcerpt | null;
+ }
+ 
+ /**
+@@ -72,8 +108,27 @@ export interface RenderBundleInput {
+  * into the model's context.
+  */
+ export function renderBundleMarkdown(input: RenderBundleInput): string {
+-	const { node, origin, buildSha, toolingInvariants, skillsIndex } = input;
+-	const domainPointers = input.domainPointers;
++	const {
++		node,
++		name,
++		mission,
++		generatedAt,
++		origin,
++		buildSha,
++		toolingInvariants,
++		orientation,
++	} = input;
++	const { skillsIndex, domainPointers } = input;
++	// "2026-06-16 14:20" — human date, not an ISO wall of digits.
++	const loadedAt = generatedAt.replace("T", " ").slice(0, 16);
++	const subtitle = [
++		mission,
++		`${skillsIndex.length} skills`,
++		`${domainPointers.length} domains`,
++		`loaded ${loadedAt}`,
++	]
++		.filter(Boolean)
++		.join(" · ");
+ 
+ 	const invariants = toolingInvariants
+ 		.map((line, i) => `${i + 1}. ${line}`)
+@@ -98,10 +153,31 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
+ 					.join("\n")
+ 			: "| _(none)_ | | |";
+ 
++	// The map, not just the constitution: one bounded current-node orientation
++	// excerpt (INDEX_FIRST carve-out). Falls back to a seed prompt when unset so
++	// the convention surfaces even before the entry exists.
++	const orientationLines = orientation
++		? [
++				"## Orientation — recall this first",
++				"",
++				orientation.excerpt,
++				"",
++				`_Current-node operating map. Recall \`${orientation.id}\` for the full context (where to edit, what not to run, what can break prod/candidate, what to recall next), and refine it when repo layout, scripts, CI, deploy, auth, or validation change._`,
++			]
++		: [
++				"## Orientation — recall this first",
++				"",
++				`_No \`${name}-agent-orientation\` entry yet. Recall the hub, then seed one — the current-node operating map for agents (what this node is, where authority lives, what's safe, what to recall next) — and refine it as the repo changes._`,
++			];
++
+ 	return [
+-		`# Cogni \`${node}\` — Session Cognition (live from the knowledge endpoint · build \`${buildSha}\`)`,
++		`# ${name} — Cogni Session Cognition`,
++		"",
++		`> ${subtitle}`,
++		">",
++		`> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
+ 		"",
+-		`> Delivered at session start from ${origin}/api/v1/cognition — this replaces git-synced AGENTS.md sprawl. Re-fetch any time.`,
++		...orientationLines,
+ 		"",
+ 		"## Tooling invariants (irreducible session contract)",
+ 		"",
+@@ -124,7 +200,8 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
+ 		`- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,
+ 		`- Full entry body: \`GET ${origin}/api/v1/knowledge/{id}\``,
+ 		`- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
+-		"- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (recall both planes → refine in place > write new)",
++		"- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
++		`- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
+ 		"",
+ 	].join("\n");
+ }
+diff --git a/app/src/app/api/v1/cognition/route.ts b/app/src/app/api/v1/cognition/route.ts
+index 704f856c..dc73a92f 100644
+--- a/app/src/app/api/v1/cognition/route.ts
++++ b/app/src/app/api/v1/cognition/route.ts
+@@ -8,11 +8,13 @@
+  *   with a live skills index + domain pointers from the knowledge hub, plus a
+  *   rendered markdown bundle a SessionStart hook echoes into agent context.
+  * Scope: Single authed GET (any principal: cookie-session human OR bearer
+- *   agent). Reads via container.knowledgeStorePort. Index-only — full entry
+- *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
++ *   agent). Reads via container.knowledgeStorePort. Index-first — full entry
++ *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL),
++ *   save one bounded current-node orientation excerpt.
+  *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
+  * Invariants:
+- *   - INDEX_NOT_CONTENT: returns skill/domain pointers, never full bodies.
++ *   - INDEX_FIRST: returns skill/domain pointers + one bounded orientation
++ *     excerpt, never full entry bodies.
+  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
+  *     when the hub is unconfigured or empty.
+  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
+@@ -30,9 +32,12 @@ import { NextResponse } from "next/server";
+ import { getSessionUser } from "@/app/_lib/auth/session";
+ import { getContainer } from "@/bootstrap/container";
+ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
++import { getNodeMission, getNodeName } from "@/shared/config";
+ import { serverEnv } from "@/shared/env";
+ import {
++	excerptFromContent,
+ 	isCognitionEntry,
++	type OrientationExcerpt,
+ 	renderBundleMarkdown,
+ 	SESSION_BOOTSTRAP_INVARIANTS,
+ } from "./_bundle";
+@@ -70,10 +75,19 @@ export const GET = wrapRouteHandlerWithLogging(
+ 		const container = getContainer();
+ 		const origin = publicOrigin(request);
+ 		const node = container.nodeId;
++		const name = getNodeName();
++		const mission = getNodeMission();
+ 		const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
++		const generatedAt = new Date().toISOString();
+ 
+ 		const skillsIndex: CognitionSkillPointer[] = [];
+ 		const domainPointers: CognitionDomainPointer[] = [];
++		// The current node's orientation entry id, by `<slug>-agent-orientation`
++		// convention — captured during the scan, its excerpt fetched below. A
++		// node-specific entry (`<name>-agent-orientation`) wins over the generic
++		// `cogni-agent-orientation` starter seed every node inherits.
++		const exactOrientationId = `${name}-agent-orientation`;
++		let orientationId: string | null = null;
+ 
+ 		// Cognition is delivered live from the hub; the irreducible invariants below
+ 		// are the only piece that must survive an unconfigured/empty hub.
+@@ -81,6 +95,9 @@ export const GET = wrapRouteHandlerWithLogging(
+ 		if (port) {
+ 			const domains = await port.listDomainsFull();
+ 			for (const d of domains) {
++				// Suppress empty domains (e.g. a placeholder `nodes` with 0 entries):
++				// a bare count is noise in a precious index.
++				if (d.entryCount === 0) continue;
+ 				domainPointers.push({
+ 					domain: d.id,
+ 					description: d.description,
+@@ -90,6 +107,11 @@ export const GET = wrapRouteHandlerWithLogging(
+ 					limit: PER_DOMAIN_LIMIT,
+ 				});
+ 				for (const r of rows) {
++					if (r.id === exactOrientationId) {
++						orientationId = r.id;
++					} else if (!orientationId && r.id.endsWith("-agent-orientation")) {
++						orientationId = r.id;
++					}
+ 					if (!isCognitionEntry(r.entryType)) continue;
+ 					skillsIndex.push({
+ 						id: r.id,
+@@ -101,6 +123,17 @@ export const GET = wrapRouteHandlerWithLogging(
+ 			}
+ 		}
+ 
++		let orientation: OrientationExcerpt | null = null;
++		if (port && orientationId) {
++			const entry = await port.getKnowledge(orientationId);
++			if (entry) {
++				orientation = {
++					id: entry.id,
++					excerpt: excerptFromContent(entry.content),
++				};
++			}
++		}
++
+ 		const toolingInvariants = [...SESSION_BOOTSTRAP_INVARIANTS];
+ 		const recallProtocol =
+ 			`RECALL both planes before writing: merged via GET ${origin}/api/v1/knowledge?domain=<domain>, ` +
+@@ -109,18 +142,24 @@ export const GET = wrapRouteHandlerWithLogging(
+ 
+ 		const markdown = renderBundleMarkdown({
+ 			node,
++			name,
++			mission,
++			generatedAt,
+ 			origin,
+ 			buildSha,
+ 			toolingInvariants,
+ 			skillsIndex,
+ 			domainPointers,
++			orientation,
+ 		});
+ 
+ 		ctx.log.info(
+ 			{
+ 				node,
++				name,
+ 				skills: skillsIndex.length,
+ 				domains: domainPointers.length,
++				orientation: orientation?.id ?? null,
+ 				hub: Boolean(port),
+ 			},
+ 			"cognition.bundle_success",
+@@ -129,9 +168,11 @@ export const GET = wrapRouteHandlerWithLogging(
+ 		const response = NextResponse.json(
+ 			CognitionBundleResponseSchema.parse({
+ 				node,
++				name,
++				mission,
+ 				version: "v1",
+ 				buildSha,
+-				generatedAt: new Date().toISOString(),
++				generatedAt,
+ 				toolingInvariants,
+ 				skillsIndex,
+ 				domainPointers,
+diff --git a/app/src/shared/config/index.ts b/app/src/shared/config/index.ts
+index ba83dffd..9291316b 100644
+--- a/app/src/shared/config/index.ts
++++ b/app/src/shared/config/index.ts
+@@ -20,6 +20,8 @@ export {
+   getGovernanceConfig,
+   getLedgerApprovers,
+   getNodeId,
++  getNodeMission,
++  getNodeName,
+   getOperatorWalletConfig,
+   getPaymentConfig,
+   getScopeId,
+diff --git a/app/src/shared/config/repoSpec.server.ts b/app/src/shared/config/repoSpec.server.ts
+index 25febb0d..21a49d8d 100644
+--- a/app/src/shared/config/repoSpec.server.ts
++++ b/app/src/shared/config/repoSpec.server.ts
+@@ -20,6 +20,8 @@ import {
+   extractDaoTreasuryAddress,
+   extractGovernanceConfig,
+   extractLedgerApprovers,
++  extractNodeMission,
++  extractNodeName,
+   extractOperatorWalletConfig,
+   extractPaymentConfig,
+   type GovernanceConfig,
+@@ -95,6 +97,20 @@ export function getNodeId(): string {
+   return cachedNodeId;
+ }
+ 
++let cachedNodeName: string | null = null;
++
++/** Human-facing node slug from repo-spec `intent.name` (falls back to node_id). */
++export function getNodeName(): string {
++  if (cachedNodeName) return cachedNodeName;
++  cachedNodeName = extractNodeName(loadRepoSpec());
++  return cachedNodeName;
++}
++
++/** One-line node mission from repo-spec `intent.mission`, or null when undeclared. */
++export function getNodeMission(): string | null {
++  return extractNodeMission(loadRepoSpec());
++}
++
+ let cachedScopeId: string | null = null;
+ 
+ /**
+diff --git a/app/tests/unit/packages/repo-spec/accessors.test.ts b/app/tests/unit/packages/repo-spec/accessors.test.ts
+index a97df3de..ed0db861 100644
+--- a/app/tests/unit/packages/repo-spec/accessors.test.ts
++++ b/app/tests/unit/packages/repo-spec/accessors.test.ts
+@@ -17,6 +17,8 @@ import {
+   extractLedgerApprovers,
+   extractLedgerConfig,
+   extractNodeId,
++  extractNodeMission,
++  extractNodeName,
+   extractOperatorWalletConfig,
+   extractPaymentConfig,
+   extractScopeId,
+@@ -87,6 +89,37 @@ describe("extractNodeId", () => {
+   });
+ });
+ 
++describe("extractNodeName", () => {
++  it("returns intent.name when present", () => {
++    const spec = buildSpec({ intent: { name: "beacon" } });
++    expect(extractNodeName(spec)).toBe("beacon");
++  });
++
++  it("falls back to node_id for pre-intent specs", () => {
++    expect(extractNodeName(buildSpec())).toBe(TEST_NODE_ID);
++  });
++});
++
++describe("extractNodeMission", () => {
++  it("returns intent.mission when present", () => {
++    const spec = buildSpec({
++      intent: {
++        name: "operator",
++        mission: "Coordinate code, deploys, and validation for Cogni nodes.",
++      },
++    });
++
++    expect(extractNodeMission(spec)).toBe(
++      "Coordinate code, deploys, and validation for Cogni nodes."
++    );
++  });
++
++  it("returns null when mission is absent", () => {
++    const spec = buildSpec({ intent: { name: "operator" } });
++    expect(extractNodeMission(spec)).toBeNull();
++  });
++});
++
+ describe("extractScopeId", () => {
+   it("returns scope_id when present", () => {
+     const spec = buildSpec({ scope_id: TEST_SCOPE_ID });
+diff --git a/packages/knowledge-base/src/seeds/base.ts b/packages/knowledge-base/src/seeds/base.ts
+index 930a9468..5082b2e7 100644
+--- a/packages/knowledge-base/src/seeds/base.ts
++++ b/packages/knowledge-base/src/seeds/base.ts
+@@ -30,6 +30,29 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
+     confidencePct: 80,
+     tags: ["meta", "knowledge-store", "onboarding"],
+   },
++  {
++    id: "cogni-agent-orientation",
++    domain: "meta",
++    title: "Agent orientation starter for this node",
++    entryType: "guide",
++    content:
++      "**Use when:** any agent starts a session on this node (coding, launch, research, governance, validation, or ops). This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
++      "This is the starter orientation every Cogni node inherits from the base seed set. Replace the placeholders below with this node's specifics, and write the node's own living map as a sibling `<slug>-agent-orientation` entry (a re-seed may overwrite this starter, so node-owned context belongs in the slug-specific entry).\n\n" +
++      "## Where to edit\n" +
++      "- App code, node-owned packages, and `.cogni/repo-spec.yaml` (the running app reads its OWN node spec, not the monorepo root). Fill in the real paths for this node.\n\n" +
++      "## What NOT to run\n" +
++      "- No broad local suites; push a feature branch and let CI verify.\n" +
++      "- Don't modify `.github/workflows/*` in a feature commit (can quarantine CI).\n\n" +
++      "## What can break prod / candidate\n" +
++      "- DB creds come from ESO/OpenBao on every env; never write plaintext DB passwords.\n" +
++      "- Deploys ship prebuilt images by SHA; verify the live build before validating.\n\n" +
++      "## What to recall next\n" +
++      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
++      "Refine whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes.",
++    sourceType: "human",
++    confidencePct: 60,
++    tags: ["agent-orientation", "operating-map", "onboarding", "session-start"],
++  },
+   {
+     id: "cogni-meta-confidence-convention",
+     domain: "meta",
+diff --git a/packages/node-contracts/src/cognition.v1.contract.ts b/packages/node-contracts/src/cognition.v1.contract.ts
+index beb0c8e0..9308dbe8 100644
+--- a/packages/node-contracts/src/cognition.v1.contract.ts
++++ b/packages/node-contracts/src/cognition.v1.contract.ts
+@@ -41,7 +41,12 @@ export type CognitionDomainPointer = z.infer<
+ >;
+ 
+ export const CognitionBundleResponseSchema = z.object({
++	/** Node UUID (node_id) — stable machine identity. */
+ 	node: z.string(),
++	/** Human-facing node slug from repo-spec `intent.name` (e.g. `operator`). */
++	name: z.string(),
++	/** One-line node mission from repo-spec `intent.mission`, null when undeclared. */
++	mission: z.string().nullable(),
+ 	version: z.literal("v1"),
+ 	buildSha: z.string(),
+ 	generatedAt: z.string(),
+diff --git a/packages/repo-spec/src/accessors.ts b/packages/repo-spec/src/accessors.ts
+index 40e526be..0afd541c 100644
+--- a/packages/repo-spec/src/accessors.ts
++++ b/packages/repo-spec/src/accessors.ts
+@@ -72,6 +72,19 @@ export function extractNodeId(spec: RepoSpec): string {
+   return spec.node_id;
+ }
+ 
++/**
++ * Human-facing node slug from `intent.name` (e.g. `operator`, `beacon`).
++ * Falls back to `node_id` when `intent.name` is absent (pre-intent repo-specs).
++ */
++export function extractNodeName(spec: RepoSpec): string {
++  return spec.intent?.name ?? spec.node_id;
++}
++
++/** One-line node mission from `intent.mission`, or null when undeclared. */
++export function extractNodeMission(spec: RepoSpec): string | null {
++  return spec.intent?.mission ?? null;
++}
++
+ /**
+  * Extract scope_id from parsed repo-spec.
+  * Throws if scope_id is not present (required for ledger scope gating).
+diff --git a/packages/repo-spec/src/index.ts b/packages/repo-spec/src/index.ts
+index 0293cea0..c9f57bae 100644
+--- a/packages/repo-spec/src/index.ts
++++ b/packages/repo-spec/src/index.ts
+@@ -21,6 +21,8 @@ export {
+   extractLedgerApprovers,
+   extractLedgerConfig,
+   extractNodeId,
++  extractNodeMission,
++  extractNodeName,
+   extractNodePath,
+   extractNodes,
+   extractOperatorWalletConfig,
+diff --git a/packages/repo-spec/src/schema.ts b/packages/repo-spec/src/schema.ts
+index 7354ed61..3d66ba71 100644
+--- a/packages/repo-spec/src/schema.ts
++++ b/packages/repo-spec/src/schema.ts
+@@ -280,6 +280,19 @@ export const repoSpecSchema = z
+     /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
+     node_id: z.string().uuid("node_id must be a valid UUID"),
+ 
++    /**
++     * Human-facing node identity (display, not a key). `name` is the node slug
++     * (e.g. `operator`, `beacon`); `mission` is the one-line core mission the
++     * cognition substrate surfaces at session start. Optional for back-compat.
++     */
++    intent: z
++      .object({
++        name: z.string().min(1),
++        mission: z.string().min(1).optional(),
++      })
++      .passthrough()
++      .optional(),
++
+     /** Stable opaque scope UUID — DB FK, never changes. Optional for backward compat. */
+     scope_id: scopeIdSchema.optional(),
+ 

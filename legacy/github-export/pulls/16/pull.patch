@@ -1,0 +1,34 @@
+From dd2943d40aee6b516cc964e7855e112265efc46a Mon Sep 17 00:00:00 2001
+From: flock-leader <derekgranito@gmail.com>
+Date: Thu, 25 Jun 2026 17:41:13 -0700
+Subject: [PATCH] =?UTF-8?q?feat(identity):=20set=20repo-spec=20intent=20?=
+ =?UTF-8?q?=E2=80=94=20hook=20+=20mission=20+=20brand{icon,color}?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Full node identity (Tier-3, node-local). Projects to /.well-known/agent.json →
+the operator gallery once this repo's Tier-2 sync lands the brand.icon-reading
+code (agent.json projection + opengraph-image). brand.icon reuses the node's
+existing AppHeader mark as the single source.
+---
+ .cogni/repo-spec.yaml | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/.cogni/repo-spec.yaml b/.cogni/repo-spec.yaml
+index b3e2ed43..0164c4ec 100644
+--- a/.cogni/repo-spec.yaml
++++ b/.cogni/repo-spec.yaml
+@@ -15,7 +15,11 @@ scope_key: "default"
+ 
+ intent:
+   name: red
+-  mission: "Adversarial security intelligence: think like an attacker so defenders win. The red team to blue's defense."
++  hook: "Break it before they do"
++  mission: "An AI-powered hacking team, for good — think like an attacker so defenders win. In perpetual war with blue."
++  brand:
++    icon: "Crosshair"
++    color: "#ef4444"
+ 
+ cogni_dao:
+   dao_contract: "0xe77f1d69b17e24aaab0299e9bc3bcf079fb78914"

@@ -1,0 +1,28 @@
+From b58ddf2affdb95b380a43e1391ea50420957634b Mon Sep 17 00:00:00 2001
+From: codex <codex@cognidao.org>
+Date: Sun, 28 Jun 2026 22:47:14 -0700
+Subject: [PATCH] chore(agents): expose Claude instructions to Codex
+
+---
+ .agents/commands | 1 +
+ .agents/skills   | 1 +
+ 2 files changed, 2 insertions(+)
+ create mode 120000 .agents/commands
+ create mode 120000 .agents/skills
+
+diff --git a/.agents/commands b/.agents/commands
+new file mode 120000
+index 00000000..0b631dd5
+--- /dev/null
++++ b/.agents/commands
+@@ -0,0 +1 @@
++../.claude/commands
+\ No newline at end of file
+diff --git a/.agents/skills b/.agents/skills
+new file mode 120000
+index 00000000..454b8427
+--- /dev/null
++++ b/.agents/skills
+@@ -0,0 +1 @@
++../.claude/skills
+\ No newline at end of file

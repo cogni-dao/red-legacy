@@ -1,0 +1,106 @@
+From 72c8d441ab90ec5ce958fb2d5b5be7564c2a8a36 Mon Sep 17 00:00:00 2001
+From: flock-leader <flock-leader@cognidao.org>
+Date: Thu, 25 Jun 2026 02:44:33 -0700
+Subject: [PATCH 1/2] fix(treasury): decouple on-chain read client from payment
+ activation (port op #1843)
+
+---
+ .../viem-evm-onchain-client.adapter.ts        | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+index 6af5730b..d4fd0705 100644
+--- a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
++++ b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+@@ -24,7 +24,7 @@ import {
+   type TransactionReceipt,
+ } from "viem";
+ 
+-import { getPaymentConfig } from "@/shared/config/repoSpec.server";
++import { getDaoConfig } from "@/shared/config/repoSpec.server";
+ import { serverEnv } from "@/shared/env";
+ import { CHAIN, ERC20_ABI } from "@/shared/web3";
+ import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
+@@ -42,15 +42,20 @@ export class ViemEvmOnchainClient implements EvmOnchainClient {
+     }
+ 
+     const env = serverEnv();
+-    const config = getPaymentConfig();
+-    if (!config) {
+-      throw new Error("[ViemEvmOnchainClient] Payment rails not activated");
++    // On-chain READS need only chain identity + RPC - NOT payment activation. Source the
++    // chain from cogni_dao.chain_id (getDaoConfig), not getPaymentConfig: a treasury balance
++    // read must work for any node with a DAO, activated or not. The getPaymentConfig() gate
++    // threw "Payment rails not activated" for non-activated nodes -> fleet "Treasury --". (op #1843)
++    const dao = getDaoConfig();
++    if (!dao) {
++      throw new Error(
++        "[ViemEvmOnchainClient] Node DAO identity not configured (cogni_dao section incomplete)"
++      );
+     }
+ 
+-    // Validate chain ID matches repo-spec
+-    if (config.chainId !== CHAIN.id) {
++    if (Number(dao.chain_id) !== CHAIN.id) {
+       throw new Error(
+-        `[ViemEvmOnchainClient] Chain mismatch: repo-spec declares ${config.chainId}, CHAIN constant is ${CHAIN.id}`
++        `[ViemEvmOnchainClient] Chain mismatch: repo-spec cogni_dao declares ${dao.chain_id}, CHAIN constant is ${CHAIN.id}`
+       );
+     }
+ 
+
+From abd05716a64fa9233395e3c0460568f9d94104cd Mon Sep 17 00:00:00 2001
+From: derekg1729 <derekgranito@gmail.com>
+Date: Thu, 25 Jun 2026 13:11:06 -0700
+Subject: [PATCH 2/2] =?UTF-8?q?fix(treasury):=20gate#2=20=E2=80=94=20snaps?=
+ =?UTF-8?q?hot=20reads=20DAO=20identity,=20not=20payment=20activation?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Second getPaymentConfig() gate (treasury adapter) joined gate#1 (client).
+Proven live on beacon-test: blockNumber:0/[] -> 47814334/[USDC] (real Base read).
+---
+ .../server/onchain/viem-treasury.adapter.ts   | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/app/src/adapters/server/onchain/viem-treasury.adapter.ts b/app/src/adapters/server/onchain/viem-treasury.adapter.ts
+index df3e1dff..38f5f05b 100644
+--- a/app/src/adapters/server/onchain/viem-treasury.adapter.ts
++++ b/app/src/adapters/server/onchain/viem-treasury.adapter.ts
+@@ -15,7 +15,7 @@
+ import { formatUnits, getAddress } from "viem";
+ 
+ import type { TreasuryReadPort, TreasurySnapshot } from "@/ports";
+-import { getPaymentConfig } from "@/shared/config/repoSpec.server";
++import { getDaoConfig } from "@/shared/config/repoSpec.server";
+ import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
+ import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
+ 
+@@ -31,15 +31,20 @@ export class ViemTreasuryAdapter implements TreasuryReadPort {
+     treasuryAddress: string;
+     tokenAddresses?: string[];
+   }): Promise<TreasurySnapshot> {
+-    // Validate chainId against canonical config
+-    const config = getPaymentConfig();
+-    if (!config) {
+-      throw new Error("[ViemTreasuryAdapter] Payment rails not activated");
++    // Validate chainId against the node's DAO identity (cogni_dao section).
++    // Treasury reads depend on chain identity, NOT payment-rail activation —
++    // a node can read its treasury before payments are turned on.
++    const dao = getDaoConfig();
++    if (!dao) {
++      throw new Error(
++        "[ViemTreasuryAdapter] Node DAO identity not configured (cogni_dao section incomplete)"
++      );
+     }
+ 
+-    if (params.chainId !== config.chainId) {
++    const daoChainId = Number(dao.chain_id);
++    if (params.chainId !== daoChainId) {
+       throw new Error(
+-        `[ViemTreasuryAdapter] Chain ID mismatch: expected ${config.chainId}, got ${params.chainId}`
++        `[ViemTreasuryAdapter] Chain ID mismatch: expected ${daoChainId}, got ${params.chainId}`
+       );
+     }
+ 

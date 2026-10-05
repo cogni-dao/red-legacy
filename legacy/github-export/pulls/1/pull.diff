@@ -1,0 +1,1760 @@
+diff --git a/.cogni/repo-spec.yaml b/.cogni/repo-spec.yaml
+index 24b4bfef..b3e2ed43 100644
+--- a/.cogni/repo-spec.yaml
++++ b/.cogni/repo-spec.yaml
+@@ -15,7 +15,7 @@ scope_key: "default"
+ 
+ intent:
+   name: red
+-  mission: "Define red's one-line mission here — refine in .cogni/repo-spec.yaml (surfaced at session start)."
++  mission: "Adversarial security intelligence: think like an attacker so defenders win. The red team to blue's defense."
+ 
+ cogni_dao:
+   dao_contract: "0xe77f1d69b17e24aaab0299e9bc3bcf079fb78914"
+diff --git a/app/public/red-node-mark.svg b/app/public/red-node-mark.svg
+new file mode 100644
+index 00000000..96b90e07
+--- /dev/null
++++ b/app/public/red-node-mark.svg
+@@ -0,0 +1,8 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
++  <title id="title">cogni/red mark</title>
++  <desc id="desc">A red crosshair node mark for adversarial security intelligence.</desc>
++  <rect width="64" height="64" rx="12" fill="#0a0a0a"/>
++  <circle cx="32" cy="32" r="18" fill="none" stroke="#dc2626" stroke-width="4"/>
++  <circle cx="32" cy="32" r="5" fill="#dc2626"/>
++  <path d="M32 6v14M32 44v14M6 32h14M44 32h14" stroke="#fafafa" stroke-width="4" stroke-linecap="round"/>
++</svg>
+diff --git a/app/src/app/(app)/chat/view.tsx b/app/src/app/(app)/chat/view.tsx
+index badc2b11..a3b7bdfa 100644
+--- a/app/src/app/(app)/chat/view.tsx
++++ b/app/src/app/(app)/chat/view.tsx
+@@ -55,13 +55,13 @@ const ChatWelcomeWithHint = () => (
+   <div className="mx-auto flex h-full w-full max-w-[var(--thread-max-width)] flex-col items-center justify-center">
+     <div className="flex flex-col justify-center gap-1 px-8">
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 duration-300 ease-out sm:text-2xl">
+-        Clone this living mind
++        Map the attack surface
+       </div>
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 delay-100 duration-300 ease-out sm:text-2xl">
+-        Teach it what your people need
++        Think like the adversary
+       </div>
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 delay-200 duration-300 ease-out sm:text-2xl">
+-        Intelligence, shared.
++        Make the defenders win.
+       </div>
+     </div>
+   </div>
+diff --git a/app/src/app/(public)/page.tsx b/app/src/app/(public)/page.tsx
+index 4c0718c7..4fdff577 100644
+--- a/app/src/app/(public)/page.tsx
++++ b/app/src/app/(public)/page.tsx
+@@ -3,19 +3,23 @@
+ 
+ /**
+  * Module: `@app/(public)/page`
+- * Purpose: Homepage with hero section and feature showcase. Redirects signed-in users to /chat.
++ * Purpose: Public landing page with hero, agent stream, red-vs-blue showcase,
++ *   activity feed, and stats. Redirects signed-in users to /chat.
+  * Scope: Server component that checks session and redirects or renders landing page. Does not handle authentication logic — proxy.ts handles primary auth routing; server-side check here is defense-in-depth.
+- * Invariants: Responsive design; uses Hero layout component.
++ * Invariants: Responsive design. Editable landing copy/data lives in
++ *   src/features/home/content.ts.
+  * Side-effects: IO (session check, redirect)
+- * Links: src/components/kit/sections/Hero.tsx, src/features/home/components/*
++ * Links: src/features/home/content.ts, src/features/home/components/*
+  * @public
+  */
+ 
+ import { redirect } from "next/navigation";
+ import type { ReactElement } from "react";
+ 
++import { ActivityFeed } from "@/features/home/components/ActivityFeed";
+ import { HomeStats } from "@/features/home/components/HomeStats";
+-import { NewHomeHero } from "@/features/home/components/NewHomeHero";
++import { LandingHero } from "@/features/home/components/LandingHero";
++import { ShowcaseCards } from "@/features/home/components/ShowcaseCards";
+ import { getServerSessionUser } from "@/lib/auth/server";
+ 
+ import { AuthRedirect } from "./AuthRedirect";
+@@ -29,7 +33,9 @@ export default async function HomePage(): Promise<ReactElement> {
+   return (
+     <div className="flex min-h-screen flex-col">
+       <AuthRedirect />
+-      <NewHomeHero />
++      <LandingHero />
++      <ShowcaseCards />
++      <ActivityFeed />
+       <HomeStats />
+     </div>
+   );
+diff --git a/app/src/app/layout.tsx b/app/src/app/layout.tsx
+index ec3a0d1d..2909c540 100644
+--- a/app/src/app/layout.tsx
++++ b/app/src/app/layout.tsx
+@@ -34,8 +34,9 @@ const manrope = Manrope({
+ });
+ 
+ export const metadata: Metadata = {
+-  title: "Cogni",
+-  description: "Web3 Gov + Web2 AI",
++  title: "cogni/red - Adversarial Security Intelligence",
++  description:
++    "Think like an attacker so defenders win. Red-team recon, threat modeling, and attack-path analysis for blue-team defense.",
+ };
+ 
+ // See operator/app/src/app/layout.tsx for rationale — `headers()` in the
+diff --git a/app/src/components/kit/navigation/MobileNav.tsx b/app/src/components/kit/navigation/MobileNav.tsx
+index 958a75a3..f0dea5c3 100644
+--- a/app/src/components/kit/navigation/MobileNav.tsx
++++ b/app/src/components/kit/navigation/MobileNav.tsx
+@@ -57,7 +57,7 @@ export function MobileNav({ className }: MobileNavProps): ReactElement {
+           <NavigationLink href="/gov">Gov</NavigationLink>
+           <NavigationLink href="/credits">Credits</NavigationLink>
+           <a
+-            href="https://github.com/cogni-DAO/cogni-template"
++            href="https://github.com/cogni-dao/red"
+             target="_blank"
+             rel="noopener noreferrer"
+             className="flex items-center gap-2 font-medium text-muted-foreground text-sm transition-colors hover:text-foreground"
+diff --git a/app/src/features/ai/components/ChatComposerExtras.tsx b/app/src/features/ai/components/ChatComposerExtras.tsx
+index eb76d448..8edfbcc3 100644
+--- a/app/src/features/ai/components/ChatComposerExtras.tsx
++++ b/app/src/features/ai/components/ChatComposerExtras.tsx
+@@ -37,14 +37,19 @@ import {
+  */
+ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
+   {
+-    graphId: "langgraph:poly-brain" satisfies GraphId,
+-    name: "Poly Brain",
+-    description: "Prediction market analyst with live market data",
++    graphId: "langgraph:brain" satisfies GraphId,
++    name: "Red Brain",
++    description: "Code-aware attack-path and threat-modeling assistant",
+   },
+   {
+-    graphId: "langgraph:brain" satisfies GraphId,
+-    name: "Brain",
+-    description: "Code-aware assistant with repo access",
++    graphId: "langgraph:research" satisfies GraphId,
++    name: "Threat Intel",
++    description: "Deep research for adversary techniques and controls",
++  },
++  {
++    graphId: "langgraph:browser" satisfies GraphId,
++    name: "Recon Browser",
++    description: "Browser agent for public-surface inspection",
+   },
+   {
+     graphId: "langgraph:poet" satisfies GraphId,
+@@ -56,26 +61,16 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
+     name: "Ponderer",
+     description: "Philosophical thinker",
+   },
+-  {
+-    graphId: "langgraph:research" satisfies GraphId,
+-    name: "Research",
+-    description: "Deep research with web search",
+-  },
+-  {
+-    graphId: "langgraph:browser" satisfies GraphId,
+-    name: "Browser",
+-    description: "Web browsing agent with Playwright MCP",
+-  },
+   {
+     graphId: "langgraph:frontend-tester" satisfies GraphId,
+-    name: "Frontend Tester",
+-    description: "QA agent — tests web UIs via Playwright",
++    name: "UI Probe",
++    description: "QA agent that tests web UI behavior with Playwright",
+   },
+   {
+     graphId: "langgraph:operating-review" satisfies GraphId,
+-    name: "Operating Review",
++    name: "Risk Review",
+     description:
+-      "Periodic review — triages backlog, flags risks, produces structured briefs",
++      "Periodic review that triages backlog risks into structured briefs",
+   },
+ ];
+ 
+diff --git a/app/src/features/home/components/ActivityFeed.tsx b/app/src/features/home/components/ActivityFeed.tsx
+new file mode 100644
+index 00000000..ad2ead8c
+--- /dev/null
++++ b/app/src/features/home/components/ActivityFeed.tsx
+@@ -0,0 +1,247 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@features/home/components/ActivityFeed`
++ * Purpose: Live Red findings feed with status counters and expandable signals.
++ * Scope: Presentational. All copy and data comes from `../content`.
++ * Invariants: none
++ * Side-effects: heartbeat timer
++ * Links: src/features/home/content.ts
++ */
++
++"use client";
++
++import { cn } from "@cogni/node-ui-kit/util/cn";
++import { AnimatePresence, motion } from "framer-motion";
++import {
++  Activity,
++  BrainCircuit,
++  ChevronRight,
++  Minus,
++  TrendingDown,
++  TrendingUp,
++} from "lucide-react";
++import type { ReactElement } from "react";
++import { useEffect, useState } from "react";
++
++import {
++  FEED_SECTION,
++  FEED_SIGNALS,
++  FEED_STATUS,
++  type FeedSignal,
++  type SignalDirection,
++} from "../content";
++
++type FeedState = "scanning" | "attacking" | "idle";
++
++function HeartbeatDot({ state }: { state: FeedState }): ReactElement {
++  const color =
++    state === "scanning"
++      ? "bg-success"
++      : state === "attacking"
++        ? "bg-primary"
++        : "bg-muted-foreground";
++  return (
++    <span className="relative flex size-2.5">
++      <span
++        className={cn(
++          "absolute inline-flex size-full animate-ping rounded-full opacity-75",
++          color
++        )}
++      />
++      <span className={cn("relative inline-flex size-2.5 rounded-full", color)} />
++    </span>
++  );
++}
++
++function DirectionBadge({
++  direction,
++}: {
++  direction: SignalDirection;
++}): ReactElement {
++  const map = {
++    positive: {
++      cls: "bg-success/10 text-success",
++      Icon: TrendingUp,
++      label: "validated",
++    },
++    negative: {
++      cls: "bg-destructive/10 text-destructive",
++      Icon: TrendingDown,
++      label: "risk",
++    },
++    neutral: {
++      cls: "bg-secondary text-muted-foreground",
++      Icon: Minus,
++      label: "watch",
++    },
++  } as const;
++  const { cls, Icon, label } = map[direction];
++  return (
++    <span
++      className={cn(
++        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-xs uppercase tracking-wider",
++        cls
++      )}
++    >
++      <Icon className="size-2.5" />
++      {label}
++    </span>
++  );
++}
++
++function SignalCard({
++  signal,
++  index,
++}: {
++  signal: FeedSignal;
++  index: number;
++}): ReactElement {
++  return (
++    <motion.div
++      initial={{ opacity: 0, y: 12 }}
++      animate={{ opacity: 1, y: 0 }}
++      transition={{ duration: 0.3, delay: index * 0.08 }}
++      className="group rounded-lg border border-border/40 bg-card p-4 transition-colors hover:border-border/80"
++    >
++      <div className="mb-2 flex items-start justify-between gap-2">
++        <div className="min-w-0 flex-1">
++          <div className="mb-1 flex flex-wrap items-center gap-1.5">
++            <span className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-muted-foreground text-xs uppercase tracking-wider">
++              {signal.category}
++            </span>
++            <span className="text-muted-foreground/40 text-xs">
++              {signal.source}
++            </span>
++            <span className="text-muted-foreground/30 text-xs">
++              {signal.timestamp}
++            </span>
++          </div>
++          <h4 className="font-medium text-foreground text-sm leading-snug">
++            {signal.title}
++          </h4>
++        </div>
++
++        <div className="flex shrink-0 flex-col items-end gap-1">
++          <DirectionBadge direction={signal.direction} />
++          <span className="font-mono text-muted-foreground text-xs">
++            {signal.confidence}% conf
++          </span>
++        </div>
++      </div>
++
++      <p className="mb-2 text-muted-foreground text-xs leading-relaxed">
++        {signal.thesis}
++      </p>
++
++      <div className="flex flex-wrap gap-1">
++        {signal.sources.map((src) => (
++          <span
++            key={src}
++            className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground/70 text-xs"
++          >
++            {src}
++          </span>
++        ))}
++      </div>
++    </motion.div>
++  );
++}
++
++export function ActivityFeed(): ReactElement {
++  const [state, setState] = useState<FeedState>("scanning");
++  const [scanned, setScanned] = useState<number>(FEED_STATUS.startScanned);
++  const [visible, setVisible] = useState(2);
++
++  useEffect(() => {
++    const interval = setInterval(() => {
++      setScanned((prev) => prev + Math.floor(Math.random() * 6));
++      setState(
++        Math.random() > 0.68
++          ? "attacking"
++          : Math.random() > 0.25
++            ? "scanning"
++            : "idle"
++      );
++    }, 3000);
++    return () => clearInterval(interval);
++  }, []);
++
++  return (
++    <section className="w-full border-border/40 border-t bg-background py-20 md:py-28">
++      <div className="mx-auto max-w-3xl px-4 sm:px-6">
++        <motion.div
++          initial={false}
++          whileInView={{ opacity: 1 }}
++          viewport={{ once: true }}
++          className="mb-8"
++        >
++          <span className="font-mono text-primary text-xs uppercase tracking-widest">
++            {FEED_SECTION.eyebrow}
++          </span>
++          <h2 className="mt-3 font-bold text-3xl tracking-tight sm:text-4xl">
++            {FEED_SECTION.heading}
++          </h2>
++          <p className="mt-3 max-w-2xl text-muted-foreground">
++            {FEED_SECTION.subhead}
++          </p>
++        </motion.div>
++
++        <motion.div
++          initial={false}
++          whileInView={{ opacity: 1, y: 0 }}
++          viewport={{ once: true }}
++          className="mb-6 flex flex-wrap items-center gap-4 rounded-lg border border-border/40 bg-card p-3 sm:gap-6 sm:p-4"
++        >
++          <div className="flex items-center gap-2">
++            <HeartbeatDot state={state} />
++            <span className="font-mono text-xs uppercase tracking-wider">
++              {state === "scanning" && <span className="text-success">Scanning</span>}
++              {state === "attacking" && (
++                <span className="text-primary">Attacking</span>
++              )}
++              {state === "idle" && (
++                <span className="text-muted-foreground">Watching</span>
++              )}
++            </span>
++          </div>
++          <div className="flex items-center gap-1.5 text-muted-foreground">
++            <Activity className="size-3" />
++            <span className="font-mono text-xs tabular-nums">
++              {scanned.toLocaleString()} {FEED_STATUS.scannedLabel}
++            </span>
++          </div>
++          <div className="flex items-center gap-1.5 text-muted-foreground">
++            <BrainCircuit className="size-3" />
++            <span className="font-mono text-xs tabular-nums">
++              {FEED_STATUS.signalsToday} {FEED_STATUS.signalsLabel}
++            </span>
++          </div>
++        </motion.div>
++
++        <div className="space-y-3">
++          <AnimatePresence>
++            {FEED_SIGNALS.slice(0, visible).map((signal, i) => (
++              <SignalCard key={signal.id} signal={signal} index={i} />
++            ))}
++          </AnimatePresence>
++        </div>
++
++        {visible < FEED_SIGNALS.length && (
++          <motion.button
++            type="button"
++            initial={false}
++            whileInView={{ opacity: 1 }}
++            viewport={{ once: true }}
++            onClick={() => setVisible(FEED_SIGNALS.length)}
++            className="mt-4 flex w-full items-center justify-center gap-1 rounded-lg border border-border/40 bg-card py-3 font-mono text-muted-foreground text-xs uppercase tracking-wider transition-colors hover:border-border/80 hover:text-foreground"
++          >
++            Show {FEED_SIGNALS.length - visible} more findings
++            <ChevronRight className="size-3" />
++          </motion.button>
++        )}
++      </div>
++    </section>
++  );
++}
+diff --git a/app/src/features/home/components/AgentStream.tsx b/app/src/features/home/components/AgentStream.tsx
+new file mode 100644
+index 00000000..99c82e4d
+--- /dev/null
++++ b/app/src/features/home/components/AgentStream.tsx
+@@ -0,0 +1,173 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@features/home/components/AgentStream`
++ * Purpose: Live "agent console" embedded in the hero. Replays simulated Red
++ *   working sequences, then loops.
++ * Scope: Presentational. Reads all copy from `../content`. No real IO.
++ * Invariants: Cleans up timers on unmount / sequence change.
++ * Side-effects: timers for streaming animation
++ * Links: src/features/home/content.ts, src/features/home/components/LandingHero.tsx
++ */
++
++"use client";
++
++import { cn } from "@cogni/node-ui-kit/util/cn";
++import { AnimatePresence, motion } from "framer-motion";
++import { CheckCircle, Loader2 } from "lucide-react";
++import type { ReactElement } from "react";
++import { useEffect, useRef, useState } from "react";
++
++import {
++  AGENT_STREAM_SEQUENCES,
++  AGENT_STREAM_SUBJECT,
++  STREAM_ICONS,
++  type StreamEvent,
++} from "../content";
++
++function EventIcon({ type }: { type: StreamEvent["type"] }): ReactElement {
++  const Icon = STREAM_ICONS[type];
++  return (
++    <Icon
++      className={cn(
++        "size-3",
++        type === "analyzing" || type === "signal"
++          ? "text-success"
++          : type === "done"
++            ? "text-muted-foreground"
++            : type === "thinking"
++              ? "text-primary"
++              : "text-muted-foreground"
++      )}
++    />
++  );
++}
++
++export function AgentStream(): ReactElement {
++  const [events, setEvents] = useState<StreamEvent[]>([]);
++  const [seqIdx, setSeqIdx] = useState(0);
++  const [isStreaming, setIsStreaming] = useState(true);
++  const scrollRef = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    const sequence =
++      AGENT_STREAM_SEQUENCES[seqIdx % AGENT_STREAM_SEQUENCES.length];
++    if (!sequence) return;
++    const timeouts: ReturnType<typeof setTimeout>[] = [];
++
++    setEvents([]);
++    setIsStreaming(true);
++
++    for (const event of sequence) {
++      timeouts.push(
++        setTimeout(() => {
++          setEvents((prev) => [...prev, event]);
++        }, event.at)
++      );
++    }
++
++    const lastEvent = sequence[sequence.length - 1];
++    if (!lastEvent) return;
++    timeouts.push(
++      setTimeout(() => {
++        setIsStreaming(false);
++      }, lastEvent.at + 500)
++    );
++    timeouts.push(
++      setTimeout(() => {
++        setSeqIdx((prev) => prev + 1);
++      }, lastEvent.at + 4000)
++    );
++
++    return () => {
++      for (const t of timeouts) clearTimeout(t);
++    };
++  }, [seqIdx]);
++
++  const eventCount = events.length;
++  // biome-ignore lint/correctness/useExhaustiveDependencies: eventCount triggers scroll
++  useEffect(() => {
++    if (scrollRef.current) {
++      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
++    }
++  }, [eventCount]);
++
++  return (
++    <motion.div
++      initial={false}
++      animate={{ opacity: 1, y: 0 }}
++      transition={{ duration: 0.2 }}
++      className="mx-auto mt-12 w-full max-w-xl"
++    >
++      <div className="overflow-hidden rounded-lg border border-border/40 bg-card/85 shadow-xl shadow-primary/5 backdrop-blur-md">
++        <div className="flex items-center gap-2 border-border/40 border-b px-4 py-2.5">
++          <div className="flex items-center gap-1.5">
++            {isStreaming ? (
++              <Loader2 className="size-3 animate-spin text-primary" />
++            ) : (
++              <CheckCircle className="size-3 text-muted-foreground" />
++            )}
++            <span className="font-mono text-muted-foreground text-xs uppercase tracking-wider">
++              {isStreaming ? "Red running" : "Pass complete"}
++            </span>
++          </div>
++          <div className="flex-1" />
++          <span className="font-mono text-muted-foreground/50 text-xs">
++            {AGENT_STREAM_SUBJECT}
++          </span>
++        </div>
++
++        <div ref={scrollRef} className="h-40 overflow-y-auto px-4 py-3 sm:h-44">
++          <AnimatePresence mode="popLayout">
++            {events.map((event) => (
++              <motion.div
++                key={event.id}
++                initial={{ opacity: 0, y: 6 }}
++                animate={{ opacity: 1, y: 0 }}
++                transition={{ duration: 0.2 }}
++                className="mb-2 flex items-start gap-2 last:mb-0"
++              >
++                <span className="mt-0.5 shrink-0">
++                  <EventIcon type={event.type} />
++                </span>
++                <span
++                  className={cn(
++                    "font-mono text-xs leading-relaxed",
++                    event.type === "signal"
++                      ? "text-success"
++                      : event.type === "done"
++                        ? "text-muted-foreground/60"
++                        : "text-muted-foreground"
++                  )}
++                >
++                  {event.text}
++                </span>
++              </motion.div>
++            ))}
++          </AnimatePresence>
++
++          {isStreaming && events.length > 0 && (
++            <motion.div
++              initial={{ opacity: 0 }}
++              animate={{ opacity: 1 }}
++              className="flex items-center gap-1 pt-1"
++            >
++              <span className="size-1 animate-pulse rounded-full bg-primary/60" />
++              <span
++                className="size-1 animate-pulse rounded-full bg-primary/60"
++                // eslint-disable-next-line no-inline-styles/no-inline-styles -- Static pulse staggering for the typing indicator
++                style={{ animationDelay: "150ms" }}
++              />
++              <span
++                className="size-1 animate-pulse rounded-full bg-primary/60"
++                // eslint-disable-next-line no-inline-styles/no-inline-styles -- Static pulse staggering for the typing indicator
++                style={{ animationDelay: "300ms" }}
++              />
++            </motion.div>
++          )}
++        </div>
++      </div>
++    </motion.div>
++  );
++}
+diff --git a/app/src/features/home/components/HomeStats.tsx b/app/src/features/home/components/HomeStats.tsx
+index 41d11adc..7fb1caf4 100644
+--- a/app/src/features/home/components/HomeStats.tsx
++++ b/app/src/features/home/components/HomeStats.tsx
+@@ -18,17 +18,7 @@ import { cn } from "@cogni/node-ui-kit/util/cn";
+ import { motion } from "framer-motion";
+ import type { ReactElement } from "react";
+ 
+-interface StatItem {
+-  value: string;
+-  label: string;
+-}
+-
+-const STATS: StatItem[] = [
+-  { value: "0%", label: "Payment Fees" },
+-  { value: "1", label: "Starter Kit" },
+-  { value: "2", label: "Critical Services" },
+-  { value: "12k+", label: "Community-Source Files" },
+-];
++import { STATS } from "../content";
+ 
+ export function HomeStats(): ReactElement {
+   return (
+@@ -38,7 +28,7 @@ export function HomeStats(): ReactElement {
+           <motion.div
+             key={stat.label}
+             className={cn(
+-              "relative flex flex-col items-center justify-center overflow-hidden rounded-2xl bg-transparent p-8"
++              "relative flex flex-col items-center justify-center overflow-hidden rounded-lg bg-transparent p-8"
+             )}
+             initial="initial"
+             whileHover="hover"
+@@ -61,10 +51,10 @@ export function HomeStats(): ReactElement {
+             }}
+             transition={{ duration: 0.2 }}
+           >
+-            <span className="font-bold text-4xl text-foreground tracking-tight sm:text-5xl">
++            <span className="font-bold text-3xl text-foreground tracking-tight sm:text-4xl">
+               {stat.value}
+             </span>
+-            <span className="mt-2 font-medium text-muted-foreground text-sm uppercase tracking-wider">
++            <span className="mt-2 text-center font-medium text-muted-foreground text-sm">
+               {stat.label}
+             </span>
+           </motion.div>
+diff --git a/app/src/features/home/components/LandingHero.tsx b/app/src/features/home/components/LandingHero.tsx
+new file mode 100644
+index 00000000..7b0f0af5
+--- /dev/null
++++ b/app/src/features/home/components/LandingHero.tsx
+@@ -0,0 +1,132 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@features/home/components/LandingHero`
++ * Purpose: Above-the-fold Red homepage hero with status, CTAs, visual backdrop,
++ *   and embedded AgentStream console.
++ * Scope: Homepage hero. Copy comes from `../content`.
++ * Invariants: Responsive; signed-in users are redirected by the page.
++ * Side-effects: timers for live counter, opens auth flow via useTryDemo
++ * Links: src/features/home/content.ts, src/features/home/components/AgentStream.tsx
++ */
++
++"use client";
++
++import { ArrowRight, Github, ShieldCheck, TrendingUp } from "lucide-react";
++import Image from "next/image";
++import Link from "next/link";
++import type { ReactElement } from "react";
++import { useEffect, useState } from "react";
++
++import { Button } from "@/components";
++// eslint-disable-next-line no-restricted-imports
++import { SparklesCore } from "@/components/vendor/shadcn-io/sparkles";
++
++import { HERO, HERO_LINKS } from "../content";
++import { useTryDemo } from "../hooks/useTryDemo";
++
++import { AgentStream } from "./AgentStream";
++
++function LiveCounter(): ReactElement {
++  const [value, setValue] = useState(37);
++
++  useEffect(() => {
++    const interval = setInterval(() => {
++      setValue((prev) => (prev >= 9999 ? 37 : prev + Math.floor(Math.random() * 5) + 1));
++    }, 120);
++    return () => clearInterval(interval);
++  }, []);
++
++  return (
++    <span className="inline-flex items-center gap-2 font-mono text-sm tracking-widest">
++      <span className="inline-block size-2 animate-pulse rounded-full bg-success" />
++      <span className="text-success tabular-nums">
++        {String(value).padStart(4, "0")}
++      </span>
++    </span>
++  );
++}
++
++export function LandingHero(): ReactElement {
++  const { handleTryDemo } = useTryDemo();
++
++  return (
++    <section className="relative flex w-full flex-col items-center justify-center overflow-hidden bg-background px-4 pt-28 pb-16 sm:px-6 sm:pt-32 sm:pb-20">
++      <div className="pointer-events-none absolute inset-0 z-0">
++        <SparklesCore
++          id="red-hero-sparkles"
++          background="transparent"
++          minSize={0.35}
++          maxSize={1}
++          particleDensity={65}
++          className="h-full w-full"
++          // eslint-disable-next-line ui-governance/no-raw-colors -- tsparticles canvas needs a literal color
++          particleColor="#FFFFFF"
++        />
++        {/* eslint-disable-next-line ui-governance/no-arbitrary-non-token-values -- radial mask fades particles toward the edges */}
++        <div className="absolute inset-0 h-full w-full bg-background [mask-image:radial-gradient(70%_58%_at_center,transparent_8%,white)]" />
++      </div>
++
++      <div className="pointer-events-none absolute top-24 right-1/2 z-0 translate-x-1/2 opacity-[0.07] sm:top-20">
++        <Image
++          src="/red-node-mark.svg"
++          alt=""
++          width={360}
++          height={360}
++          priority
++          className="size-64 sm:size-80"
++        />
++      </div>
++
++      <div className="relative z-10 mx-auto max-w-4xl text-center">
++        <div className="mb-8 inline-flex items-center gap-3 rounded-full border border-border/60 bg-background/70 px-4 py-2 backdrop-blur-sm">
++          <TrendingUp className="size-3.5 text-primary" />
++          <span className="text-muted-foreground text-xs uppercase tracking-widest">
++            {HERO.statusLabel}
++          </span>
++          <LiveCounter />
++        </div>
++
++        <h1 className="font-bold text-4xl tracking-tight sm:text-6xl lg:text-7xl">
++          <span className="text-foreground">{HERO.headlineTop}</span>
++          <br />
++          <span className="text-gradient-accent">{HERO.headlineAccent}</span>
++        </h1>
++
++        <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl">
++          {HERO.subhead}
++        </p>
++
++        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
++          <Button size="lg" onClick={handleTryDemo}>
++            {HERO.primaryCta}
++            <ArrowRight className="ml-2 size-4" />
++          </Button>
++          <Button variant="outline" size="lg" asChild>
++            <Link href={HERO_LINKS.sourceUrl}>
++              <Github className="mr-2 size-4" />
++              View source
++            </Link>
++          </Button>
++          <Button variant="outline" size="lg" asChild>
++            <Link
++              href={HERO_LINKS.chatUrl}
++              target="_blank"
++              rel="noopener noreferrer"
++            >
++              <ShieldCheck className="mr-2 size-4" />
++              Blue channel
++            </Link>
++          </Button>
++        </div>
++
++        <span className="mt-6 block text-muted-foreground text-xs uppercase tracking-widest">
++          {HERO.ctaTagline}
++        </span>
++
++        <AgentStream />
++      </div>
++    </section>
++  );
++}
+diff --git a/app/src/features/home/components/NewHomeHero.tsx b/app/src/features/home/components/NewHomeHero.tsx
+deleted file mode 100644
+index 4c559d84..00000000
+--- a/app/src/features/home/components/NewHomeHero.tsx
++++ /dev/null
+@@ -1,133 +0,0 @@
+-// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+-
+-/**
+- * Module: `@features/home/components/NewHomeHero`
+- * Purpose: Hero section for the homepage with sparkles effect.
+- * Scope: Homepage only. Does not handle global layout.
+- * Invariants: None.
+- * Side-effects: none
+- * Links: src/components/vendor/shadcn-io/sparkles.tsx, src/features/home/hooks/useTryDemo.ts
+- */
+-
+-"use client";
+-
+-import { ArrowRight, Github } from "lucide-react";
+-import Link from "next/link";
+-import type { ReactElement } from "react";
+-
+-import { Button } from "@/components";
+-// eslint-disable-next-line no-restricted-imports
+-import { SparklesCore } from "@/components/vendor/shadcn-io/sparkles";
+-
+-import { useTryDemo } from "../hooks/useTryDemo";
+-
+-export function NewHomeHero(): ReactElement {
+-  const { handleTryDemo } = useTryDemo();
+-
+-  return (
+-    <>
+-      {/* eslint-disable-next-line ui-governance/no-arbitrary-non-token-values */}
+-      <section className="relative flex h-[25rem] w-full flex-col items-center justify-center overflow-hidden bg-background md:h-[40rem]">
+-        {/* Hero Title with Sparkles */}
+-        {}
+-        <h1 className="relative z-20 whitespace-nowrap text-center font-bold text-2xl text-foreground md:text-5xl lg:text-6xl">
+-          Build{" "}
+-          <span className="relative inline-block text-gradient-accent">
+-            community-owned
+-            {/* Sparkles Effect Container */}
+-            <div className="absolute top-full left-0 h-28 w-full md:h-40">
+-              {/* Gradients */}
+-              {/* eslint-disable-next-line ui-governance/no-raw-colors, ui-governance/no-arbitrary-non-token-values */}
+-              <div className="absolute top-0 left-0 h-[2px] w-full bg-indigo-500 blur-sm [mask-image:linear-gradient(to_right,transparent,white_10%,white_90%,transparent)]" />
+-              {/* eslint-disable-next-line ui-governance/no-raw-colors */}
+-              <div className="absolute top-0 left-0 h-px w-full bg-indigo-500 [mask-image:linear-gradient(to_right,transparent,white_10%,white_90%,transparent)]" />
+-              {/* eslint-disable-next-line ui-governance/no-raw-colors, ui-governance/no-arbitrary-non-token-values */}
+-              <div className="absolute top-0 left-0 h-[5px] w-full bg-sky-500 blur-sm [mask-image:linear-gradient(to_right,transparent,white_10%,white_90%,transparent)]" />
+-              {/* eslint-disable-next-line ui-governance/no-raw-colors */}
+-              <div className="absolute top-0 left-0 h-px w-full bg-sky-500 [mask-image:linear-gradient(to_right,transparent,white_10%,white_90%,transparent)]" />
+-
+-              {/* Core component - Mobile */}
+-              <SparklesCore
+-                id="tsparticles-mobile"
+-                background="transparent"
+-                minSize={0.1}
+-                maxSize={0.9}
+-                particleDensity={4000}
+-                className="h-full w-full md:hidden"
+-                particleColor={[
+-                  "#A855F7",
+-                  "#22C55E",
+-                  "#EAB308",
+-                  "#EF4444",
+-                  "#00C9FF",
+-                ]}
+-              />
+-
+-              {/* Core component - Desktop */}
+-              <SparklesCore
+-                id="tsparticles-desktop"
+-                background="transparent"
+-                minSize={0.4}
+-                maxSize={1}
+-                particleDensity={1200}
+-                className="hidden h-full w-full md:block"
+-                particleColor={[
+-                  "#A855F7",
+-                  "#22C55E",
+-                  "#EAB308",
+-                  "#EF4444",
+-                  "#00C9FF",
+-                ]}
+-              />
+-
+-              {/* Radial Gradient to prevent sharp edges */}
+-              <div className="absolute inset-0 h-full w-full bg-background [mask-image:radial-gradient(250px_100px_at_top,transparent_20%,white)] md:[mask-image:radial-gradient(350px_200px_at_top,transparent_20%,white)]" />
+-            </div>
+-          </span>{" "}
+-          AI apps.
+-        </h1>
+-
+-        {/* Content Below Sparkles */}
+-        <div className="relative z-20 mx-auto mt-20 max-w-7xl px-4 sm:px-6 md:mt-44">
+-          {}
+-          <div className="flex flex-col items-center justify-center text-center">
+-            <div className="mt-6 flex flex-col gap-4 sm:flex-row">
+-              <Button variant="outline" size="lg" asChild>
+-                <Link
+-                  href="https://discord.gg/3b9sSyhZ4z"
+-                  target="_blank"
+-                  rel="noopener noreferrer"
+-                >
+-                  <svg
+-                    viewBox="0 0 127.14 96.36"
+-                    fill="currentColor"
+-                    className="mr-2 size-4"
+-                    aria-hidden="true"
+-                  >
+-                    <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z" />
+-                  </svg>
+-                  Join the Chat
+-                </Link>
+-              </Button>
+-              <Button variant="outline" size="lg" asChild>
+-                <Link href="https://github.com/cogni-dao/cogni">
+-                  <Github className="mr-2 size-4" />
+-                  Start your own
+-                </Link>
+-              </Button>
+-              <Button size="lg" onClick={handleTryDemo}>
+-                Try the demo
+-                <ArrowRight className="ml-2 size-4" />
+-              </Button>
+-            </div>
+-
+-            <p className="mt-8 max-w-3xl text-lg text-muted-foreground sm:text-xl">
+-              Web3 Gov + Web2 AI
+-            </p>
+-          </div>
+-        </div>
+-      </section>
+-    </>
+-  );
+-}
+diff --git a/app/src/features/home/components/ShowcaseCards.tsx b/app/src/features/home/components/ShowcaseCards.tsx
+new file mode 100644
+index 00000000..0e4b5725
+--- /dev/null
++++ b/app/src/features/home/components/ShowcaseCards.tsx
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@features/home/components/ShowcaseCards`
++ * Purpose: Red-vs-blue showcase section with category filters and outcome cards.
++ * Scope: Presentational. All copy and data comes from `../content`.
++ * Invariants: Two-segment bars should sum to roughly 100.
++ * Side-effects: none
++ * Links: src/features/home/content.ts
++ */
++
++"use client";
++
++import { cn } from "@cogni/node-ui-kit/util/cn";
++import { motion } from "framer-motion";
++import { TrendingDown, TrendingUp } from "lucide-react";
++import type { ReactElement } from "react";
++import { useState } from "react";
++
++import {
++  SHOWCASE_CATEGORIES,
++  SHOWCASE_ITEMS,
++  SHOWCASE_SECTION,
++  type ShowcaseItem,
++  type ShowcaseOutcome,
++} from "../content";
++
++function SplitBar({
++  outcomes,
++}: {
++  outcomes: [ShowcaseOutcome, ShowcaseOutcome];
++}): ReactElement {
++  const [a, b] = outcomes;
++  return (
++    <div className="flex gap-1.5">
++      <div
++        className="flex items-center justify-center rounded-md bg-success/15 py-2 font-mono text-success text-xs transition-all"
++        // eslint-disable-next-line no-inline-styles/no-inline-styles -- Data-driven bar width
++        style={{ width: `${a.value}%` }}
++      >
++        {a.value > 15 && <span>{`${a.label} ${a.value}`}</span>}
++      </div>
++      <div
++        className="flex items-center justify-center rounded-md bg-destructive/15 py-2 font-mono text-destructive text-xs transition-all"
++        // eslint-disable-next-line no-inline-styles/no-inline-styles -- Data-driven bar width
++        style={{ width: `${b.value}%` }}
++      >
++        {b.value > 15 && <span>{`${b.label} ${b.value}`}</span>}
++      </div>
++    </div>
++  );
++}
++
++function ChangeBadge({ change }: { change: number }): ReactElement {
++  const isUp = change > 0;
++  return (
++    <span
++      className={cn(
++        "inline-flex items-center gap-0.5 font-mono text-xs",
++        isUp ? "text-success" : "text-destructive"
++      )}
++    >
++      {isUp ? (
++        <TrendingUp className="size-3" />
++      ) : (
++        <TrendingDown className="size-3" />
++      )}
++      {isUp ? "+" : ""}
++      {change}%
++    </span>
++  );
++}
++
++function Card({
++  item,
++  delay,
++}: {
++  item: ShowcaseItem;
++  delay: number;
++}): ReactElement {
++  return (
++    <motion.div
++      initial={false}
++      whileInView={{ opacity: 1, y: 0 }}
++      viewport={{ once: true }}
++      transition={{ duration: 0.4, delay }}
++      className="rounded-lg border border-border/40 bg-card p-4 sm:p-5"
++    >
++      <div className="mb-3 flex items-start justify-between gap-3">
++        <div className="min-w-0 flex-1">
++          <div className="mb-1 flex items-center gap-2">
++            <span className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-muted-foreground text-xs uppercase tracking-wider">
++              {item.category}
++            </span>
++            <span className="text-muted-foreground/50 text-xs">
++              {item.source}
++            </span>
++          </div>
++          <h3 className="font-semibold text-foreground text-sm leading-snug sm:text-base">
++            {item.title}
++          </h3>
++        </div>
++        <div className="shrink-0 text-right">
++          <div className="font-bold font-mono text-foreground text-lg tabular-nums sm:text-xl">
++            {item.metric}
++          </div>
++          <ChangeBadge change={item.change} />
++        </div>
++      </div>
++
++      <SplitBar outcomes={item.outcomes} />
++
++      <div className="mt-3 flex items-center justify-between gap-3">
++        <span className="font-mono text-muted-foreground/60 text-xs uppercase tracking-wider">
++          {item.footerLeft}
++        </span>
++        <span className="text-right font-mono text-muted-foreground/60 text-xs uppercase tracking-wider">
++          {item.footerRight}
++        </span>
++      </div>
++    </motion.div>
++  );
++}
++
++export function ShowcaseCards(): ReactElement {
++  const [active, setActive] = useState<string>(SHOWCASE_CATEGORIES[0]);
++  const items =
++    active === SHOWCASE_CATEGORIES[0]
++      ? SHOWCASE_ITEMS
++      : SHOWCASE_ITEMS.filter((m) => m.category === active);
++
++  return (
++    <section id="showcase" className="w-full bg-background py-20 md:py-28">
++      <div className="mx-auto max-w-5xl px-4 sm:px-6">
++        <motion.div
++          initial={false}
++          whileInView={{ opacity: 1 }}
++          viewport={{ once: true }}
++          className="mb-12"
++        >
++          <span className="font-mono text-primary text-xs uppercase tracking-widest">
++            {SHOWCASE_SECTION.eyebrow}
++          </span>
++          <h2 className="mt-3 font-bold text-3xl tracking-tight sm:text-4xl">
++            {SHOWCASE_SECTION.heading}
++          </h2>
++          <p className="mt-3 max-w-2xl text-muted-foreground">
++            {SHOWCASE_SECTION.subhead}
++          </p>
++        </motion.div>
++
++        <div className="mb-6 flex flex-wrap gap-2">
++          {SHOWCASE_CATEGORIES.map((cat) => (
++            <button
++              key={cat}
++              type="button"
++              onClick={() => setActive(cat)}
++              className={cn(
++                "rounded-full px-3 py-1 font-mono text-xs uppercase tracking-wider transition-colors",
++                cat === active
++                  ? "bg-primary/15 text-primary"
++                  : "bg-secondary text-muted-foreground hover:text-foreground"
++              )}
++            >
++              {cat}
++            </button>
++          ))}
++        </div>
++
++        <div className="grid gap-4 sm:grid-cols-2">
++          {items.map((m, i) => (
++            <Card key={m.id} item={m} delay={i * 0.08} />
++          ))}
++        </div>
++      </div>
++    </section>
++  );
++}
+diff --git a/app/src/features/home/content.ts b/app/src/features/home/content.ts
+new file mode 100644
+index 00000000..1e4095fb
+--- /dev/null
++++ b/app/src/features/home/content.ts
+@@ -0,0 +1,360 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@features/home/content`
++ * Purpose: Single customization surface for the public Red landing page.
++ * Scope: Public homepage content. No logic, no IO; pure data for the landing
++ *   page components.
++ * Invariants: Shapes stay stable so layout components remain generic.
++ * Side-effects: none
++ * Links: src/features/home/components/LandingHero.tsx,
++ *   src/features/home/components/ShowcaseCards.tsx,
++ *   src/features/home/components/ActivityFeed.tsx,
++ *   src/features/home/components/AgentStream.tsx,
++ *   src/features/home/components/HomeStats.tsx
++ * @public
++ */
++
++import {
++  Activity,
++  BrainCircuit,
++  CheckCircle,
++  Crosshair,
++  Network,
++  Radar,
++  Search,
++  ShieldCheck,
++  Sparkles,
++  Swords,
++  type LucideIcon,
++} from "lucide-react";
++
++export interface HeroContent {
++  statusLabel: string;
++  headlineTop: string;
++  headlineAccent: string;
++  subhead: string;
++  primaryCta: string;
++  ctaTagline: string;
++}
++
++export const HERO: HeroContent = {
++  statusLabel: "Red cell online",
++  headlineTop: "Continuously attack",
++  headlineAccent: "the Cogni network.",
++  subhead:
++    "Red is the adversarial AI node for Cogni: it maps live attack surface, probes for exploitable paths, and turns findings into blue-team fixes before they become incidents.",
++  primaryCta: "Open red chat",
++  ctaTagline: "Recon. Exploit hypothesis. Blue handoff. Regression watch.",
++};
++
++export const HERO_LINKS = {
++  chatUrl: "https://discord.gg/3b9sSyhZ4z",
++  sourceUrl: "https://github.com/cogni-dao/red",
++} as const;
++
++export type StreamEventType =
++  | "thinking"
++  | "searching"
++  | "analyzing"
++  | "signal"
++  | "done";
++
++export interface StreamEvent {
++  id: string;
++  type: StreamEventType;
++  text: string;
++  at: number;
++}
++
++export const AGENT_STREAM_SUBJECT = "cogni/red";
++
++export const AGENT_STREAM_SEQUENCES: StreamEvent[][] = [
++  [
++    {
++      id: "dao-1",
++      type: "thinking",
++      text: "Loading current Cogni graph: repos, workflows, node APIs, deploy slots",
++      at: 0,
++    },
++    {
++      id: "dao-2",
++      type: "searching",
++      text: "Scanning PR diffs, candidate endpoints, route manifests, and auth seams",
++      at: 1600,
++    },
++    {
++      id: "dao-3",
++      type: "analyzing",
++      text: "Building attack paths across token scope, agent registration, and CI handoff",
++      at: 3400,
++    },
++    {
++      id: "dao-4",
++      type: "signal",
++      text: "Signal: candidate auth proves API access, not browser session. File blue-team clarification.",
++      at: 5400,
++    },
++    {
++      id: "dao-5",
++      type: "done",
++      text: "Pass complete. Finding queued with reproducer, impact, and fix owner.",
++      at: 7200,
++    },
++  ],
++  [
++    {
++      id: "playbook-1",
++      type: "thinking",
++      text: "Selecting next playbook: public node launch surface",
++      at: 0,
++    },
++    {
++      id: "playbook-2",
++      type: "searching",
++      text: "Testing DNS, version pin, screenshot provenance, and signed-in route claims",
++      at: 1800,
++    },
++    {
++      id: "playbook-3",
++      type: "analyzing",
++      text: "Separating deploy health from user-visible browser reachability",
++      at: 3600,
++    },
++    {
++      id: "playbook-4",
++      type: "signal",
++      text: "Signal: forced resolver validation is insufficient for launch acceptance.",
++      at: 5400,
++    },
++    {
++      id: "playbook-5",
++      type: "done",
++      text: "Blue handoff ready: add a normal-DNS gate before marking deploy_verified.",
++      at: 7000,
++    },
++  ],
++  [
++    {
++      id: "external-1",
++      type: "thinking",
++      text: "vNext target model: permissioned external company program",
++      at: 0,
++    },
++    {
++      id: "external-2",
++      type: "searching",
++      text: "Mapping exposed SaaS, repos, cloud posture, vendor trust, and incident history",
++      at: 1800,
++    },
++    {
++      id: "external-3",
++      type: "analyzing",
++      text: "Generating safe exploit hypotheses with severity, proof limits, and disclosure path",
++      at: 3600,
++    },
++    {
++      id: "external-4",
++      type: "done",
++      text: "Pass complete. Customer-facing red team package drafted for approval.",
++      at: 5600,
++    },
++  ],
++];
++
++export interface ShowcaseOutcome {
++  label: string;
++  value: number;
++}
++
++export interface ShowcaseItem {
++  id: string;
++  title: string;
++  category: string;
++  source: string;
++  metric: string;
++  change: number;
++  outcomes: [ShowcaseOutcome, ShowcaseOutcome];
++  footerLeft: string;
++  footerRight: string;
++}
++
++export const SHOWCASE_SECTION = {
++  eyebrow: "Red vs blue loop",
++  heading: "A constant adversarial game inside Cogni.",
++  subhead:
++    "Red does not wait for a security review. It keeps looking, attacking within scope, and handing blue teams the evidence they need to patch, verify, and harden the network.",
++} as const;
++
++export const SHOWCASE_CATEGORIES = [
++  "All",
++  "Recon",
++  "Attack",
++  "Handoff",
++  "vNext",
++] as const;
++
++export const SHOWCASE_ITEMS: ShowcaseItem[] = [
++  {
++    id: "surface",
++    title: "Maintain a live attack map of the DAO network",
++    category: "Recon",
++    source: "Repos + deploys + APIs",
++    metric: "24/7",
++    change: 18,
++    outcomes: [
++      { label: "Known", value: 72 },
++      { label: "Unknown", value: 28 },
++    ],
++    footerLeft: "Nodes, routes, workflows",
++    footerRight: "Continuous",
++  },
++  {
++    id: "exploit",
++    title: "Turn weak signals into safe exploit hypotheses",
++    category: "Attack",
++    source: "Playbook engine",
++    metric: "P0-P3",
++    change: 11,
++    outcomes: [
++      { label: "Validated", value: 41 },
++      { label: "Rejected", value: 59 },
++    ],
++    footerLeft: "Repro + blast radius",
++    footerRight: "Scoped tests",
++  },
++  {
++    id: "blue",
++    title: "Move every real finding into a blue-team fix track",
++    category: "Handoff",
++    source: "Issue + PR loop",
++    metric: "SLA",
++    change: 9,
++    outcomes: [
++      { label: "Mitigated", value: 66 },
++      { label: "Open", value: 34 },
++    ],
++    footerLeft: "Owner, patch, regression",
++    footerRight: "Governed",
++  },
++  {
++    id: "external",
++    title: "Package Red for permissioned company attack surfaces",
++    category: "vNext",
++    source: "External program",
++    metric: "B2B",
++    change: 15,
++    outcomes: [
++      { label: "Inside", value: 52 },
++      { label: "External", value: 48 },
++    ],
++    footerLeft: "SaaS, cloud, code, vendors",
++    footerRight: "Next market",
++  },
++];
++
++export type SignalDirection = "positive" | "negative" | "neutral";
++
++export interface FeedSignal {
++  id: string;
++  title: string;
++  category: string;
++  source: string;
++  direction: SignalDirection;
++  confidence: number;
++  thesis: string;
++  sources: string[];
++  timestamp: string;
++}
++
++export const FEED_SECTION = {
++  eyebrow: "Live findings",
++  heading: "Every attack becomes an accountable fix.",
++  subhead:
++    "The point is not theater. A Red signal is useful only when it gives Blue a clear proof, owner, mitigation path, and regression check the DAO can inspect.",
++} as const;
++
++export const FEED_STATUS = {
++  scannedLabel: "surfaces scanned",
++  signalsLabel: "findings today",
++  startScanned: 8407,
++  signalsToday: 17,
++} as const;
++
++export const FEED_SIGNALS: FeedSignal[] = [
++  {
++    id: "dns",
++    title: "Launch validation split: deploy healthy, browser DNS not proven",
++    category: "Handoff",
++    source: "candidate-a",
++    direction: "negative",
++    confidence: 94,
++    thesis:
++      "A forced host resolver can prove the app serves behind Cloudflare, but it cannot prove a normal visitor can reach the node. Blue should require normal DNS resolution before deploy_verified.",
++    sources: ["Flight logs", "Browser error", "Version endpoint"],
++    timestamp: "2m ago",
++  },
++  {
++    id: "auth",
++    title: "Agent bearer token is not a signed-in web session",
++    category: "Attack",
++    source: "auth seam",
++    direction: "neutral",
++    confidence: 91,
++    thesis:
++      "API registration and browser auth are different trust paths. Red treats any claim of signed-in UX as unproven until a real session cookie reaches a gated page.",
++    sources: ["Agent register", "Chat redirect", "NextAuth session"],
++    timestamp: "6m ago",
++  },
++  {
++    id: "blue-pr",
++    title: "Blue queue requires fix owner and regression check",
++    category: "Handoff",
++    source: "security workflow",
++    direction: "positive",
++    confidence: 83,
++    thesis:
++      "Findings become useful when they are reproducible and owned. The handoff should include severity, proof limits, patch candidate, and a test that keeps the path closed.",
++    sources: ["Issue template", "PR checks", "Runbook"],
++    timestamp: "11m ago",
++  },
++  {
++    id: "external-company",
++    title: "External-company Red needs permission boundaries first",
++    category: "vNext",
++    source: "market expansion",
++    direction: "positive",
++    confidence: 78,
++    thesis:
++      "The same loop can serve companies, but only with explicit scope, evidence handling, disclosure terms, and proof-of-exploit limits before autonomous probing starts.",
++    sources: ["Scope letter", "Asset inventory", "Disclosure policy"],
++    timestamp: "19m ago",
++  },
++];
++
++export interface StatItem {
++  value: string;
++  label: string;
++}
++
++export const STATS: StatItem[] = [
++  { value: "Recon", label: "Map exposed surface" },
++  { value: "Attack", label: "Probe scoped paths" },
++  { value: "Blue", label: "Patch with owners" },
++  { value: "vNext", label: "Serve external teams" },
++];
++
++export const STREAM_ICONS: Record<StreamEventType, LucideIcon> = {
++  thinking: BrainCircuit,
++  searching: Search,
++  analyzing: Activity,
++  signal: Sparkles,
++  done: CheckCircle,
++};
++
++export const SECTION_ICON: LucideIcon = Network;
++export const HERO_ICON: LucideIcon = Crosshair;
++export const ATTACK_ICON: LucideIcon = Swords;
++export const RECON_ICON: LucideIcon = Radar;
++export const BLUE_ICON: LucideIcon = ShieldCheck;
+diff --git a/app/src/features/layout/components/AppFooter.tsx b/app/src/features/layout/components/AppFooter.tsx
+index 1e2c7a50..50b30b76 100644
+--- a/app/src/features/layout/components/AppFooter.tsx
++++ b/app/src/features/layout/components/AppFooter.tsx
+@@ -11,7 +11,7 @@
+  * @public
+  */
+ 
+-import Image from "next/image";
++import { Crosshair } from "lucide-react";
+ import Link from "next/link";
+ import type { ReactElement } from "react";
+ 
+@@ -26,16 +26,13 @@ export function AppFooter(): ReactElement {
+           {/* Brand column */}
+           <div className="col-span-2 md:col-span-1">
+             <Link href="/" className="flex items-center gap-2">
+-              <Image
+-                src="/TransparentBrainOnly.png"
+-                alt="Cogni"
+-                width={24}
+-                height={24}
+-              />
+-              <span className="font-bold text-gradient-accent">Cogni</span>
++              <Crosshair className="size-5 text-primary" aria-hidden="true" />
++              <span className="font-bold">
++                cogni<span className="text-gradient-accent">/red</span>
++              </span>
+             </Link>
+             <p className="mt-3 text-muted-foreground text-sm">
+-              Web3 Gov + Web2 AI
++              Adversarial security intelligence for defenders.
+             </p>
+           </div>
+ 
+diff --git a/app/src/features/layout/components/AppHeader.tsx b/app/src/features/layout/components/AppHeader.tsx
+index 282afc5d..56137682 100644
+--- a/app/src/features/layout/components/AppHeader.tsx
++++ b/app/src/features/layout/components/AppHeader.tsx
+@@ -14,8 +14,7 @@
+ 
+ "use client";
+ 
+-import { Github } from "lucide-react";
+-import Image from "next/image";
++import { Crosshair, Github } from "lucide-react";
+ import Link from "next/link";
+ import type { ReactElement } from "react";
+ 
+@@ -45,15 +44,12 @@ export function AppHeader(): ReactElement {
+               aria-current="page"
+               className="flex min-w-0 items-center gap-2 pl-4 sm:pl-0"
+             >
+-              <Image
+-                src="/TransparentBrainOnly.png"
+-                alt="Cogni"
+-                width={24}
+-                height={24}
+-                className="shrink-0"
++              <Crosshair
++                className="size-6 shrink-0 text-primary"
++                aria-hidden="true"
+               />
+-              <span className="hidden truncate font-bold text-gradient-accent text-xl md:inline">
+-                Cogni
++              <span className="hidden truncate font-bold text-xl md:inline">
++                cogni<span className="text-gradient-accent">/red</span>
+               </span>
+             </Link>
+ 
+diff --git a/app/src/features/layout/components/AppSidebar.tsx b/app/src/features/layout/components/AppSidebar.tsx
+index 56a96623..5bee178d 100644
+--- a/app/src/features/layout/components/AppSidebar.tsx
++++ b/app/src/features/layout/components/AppSidebar.tsx
+@@ -17,12 +17,12 @@ import {
+   BookOpen,
+   Briefcase,
+   CreditCard,
++  Crosshair,
+   Github,
+   LayoutDashboard,
+   Shield,
+   Vote,
+ } from "lucide-react";
+-import Image from "next/image";
+ import Link from "next/link";
+ import { usePathname } from "next/navigation";
+ import { useSession } from "next-auth/react";
+@@ -53,7 +53,7 @@ const NAV_ITEMS = [
+ 
+ const EXTERNAL_LINKS = [
+   {
+-    href: "https://github.com/cogni-DAO/cogni-template",
++    href: "https://github.com/cogni-dao/red",
+     label: "GitHub",
+     icon: Github,
+   },
+@@ -90,18 +90,16 @@ export function AppSidebar(): ReactElement {
+       <SidebarHeader className="h-16 shrink-0 justify-center">
+         <SidebarMenu>
+           <SidebarMenuItem>
+-            <SidebarMenuButton size="lg" asChild tooltip="Cogni">
++            <SidebarMenuButton size="lg" asChild tooltip="cogni/red">
+               <Link href="/chat">
+                 <div className="flex aspect-square size-8 items-center justify-center">
+-                  <Image
+-                    src="/TransparentBrainOnly.png"
+-                    alt="Cogni"
+-                    width={24}
+-                    height={24}
++                  <Crosshair
++                    className="size-6 text-primary"
++                    aria-hidden="true"
+                   />
+                 </div>
+-                <span className="truncate font-bold text-gradient-accent">
+-                  Cogni
++                <span className="truncate font-bold">
++                  cogni<span className="text-gradient-accent">/red</span>
+                 </span>
+               </Link>
+             </SidebarMenuButton>
+diff --git a/app/src/features/layout/components/footer-items.tsx b/app/src/features/layout/components/footer-items.tsx
+index 5d0cfaf7..a91e420d 100644
+--- a/app/src/features/layout/components/footer-items.tsx
++++ b/app/src/features/layout/components/footer-items.tsx
+@@ -49,7 +49,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+     links: [
+       {
+         label: "Documentation",
+-        href: "https://github.com/cogni-DAO/cogni-template",
++        href: "https://github.com/cogni-dao/red",
+         external: true,
+       },
+     ],
+@@ -59,7 +59,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+     links: [
+       {
+         label: "GitHub",
+-        href: "https://github.com/cogni-DAO/cogni-template",
++        href: "https://github.com/cogni-dao/red",
+         external: true,
+       },
+       {
+@@ -74,7 +74,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+ export const SOCIAL_LINKS: SocialLink[] = [
+   {
+     label: "GitHub",
+-    href: "https://github.com/cogni-DAO/cogni-template",
++    href: "https://github.com/cogni-dao/red",
+     icon: GitHubIcon,
+   },
+   {
+diff --git a/app/src/node-config.ts b/app/src/node-config.ts
+index 40d9dfd0..faf35b07 100644
+--- a/app/src/node-config.ts
++++ b/app/src/node-config.ts
+@@ -9,8 +9,8 @@ import {
+ import { DiscordIcon } from "@/components";
+ 
+ export const nodeConfig: NodeAppConfig = {
+-  name: "Cogni",
+-  logo: { src: "/TransparentBrainOnly.png", alt: "Cogni", href: "/chat" },
++  name: "cogni/red",
++  logo: { src: "/red-node-mark.svg", alt: "cogni/red", href: "/chat" },
+   navItems: [
+     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+     { href: "/work", label: "Work", icon: Briefcase },
+@@ -19,7 +19,7 @@ export const nodeConfig: NodeAppConfig = {
+   ],
+   externalLinks: [
+     {
+-      href: "https://github.com/cogni-DAO/cogni-template",
++      href: "https://github.com/cogni-dao/red",
+       label: "GitHub",
+       icon: Github,
+     },
+diff --git a/app/src/styles/tailwind.css b/app/src/styles/tailwind.css
+index f31667f6..06ab657f 100644
+--- a/app/src/styles/tailwind.css
++++ b/app/src/styles/tailwind.css
+@@ -121,7 +121,7 @@
+     --card-foreground: 222.2 84% 4.9%;
+     --popover: 210 40% 96.1%;
+     --popover-foreground: 215.4 16.3% 20%;
+-    --primary: 222.2 47.4% 11.2%;
++    --primary: 0 74% 48%;
+     --primary-foreground: 210 40% 98%;
+     --secondary: 210 40% 96.1%;
+     --secondary-foreground: 222.2 47.4% 11.2%;
+@@ -133,7 +133,7 @@
+     --destructive-foreground: var(--color-red-800);
+     --border: 214.3 31.8% 91.4%;
+     --input: 214.3 31.8% 91.4%;
+-    --ring: 222.2 84% 4.9%;
++    --ring: 0 74% 48%;
+     --chart-1: 220 70% 50%;
+     --chart-2: 160 60% 45%;
+     --chart-3: 30 80% 55%;
+@@ -148,10 +148,10 @@
+     --syntax-string: 27 87% 67%; /* orange/peach - strings & variables */
+     --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
+ 
+-    /* Accent gradient stops (aligned with brand hue 217) */
+-    --accent-from: 217 85% 50%;
+-    --accent-to: 217 100% 70%;
+-    --accent-glow: 217 95% 60%;
++    /* Accent gradient stops (aligned with brand hue 0 - red) */
++    --accent-from: 0 85% 52%;
++    --accent-to: 0 90% 65%;
++    --accent-glow: 0 90% 58%;
+ 
+     /* Status colors */
+     --color-danger: 0 84.2% 60.2%;
+@@ -161,12 +161,12 @@
+     /* Sidebar */
+     --sidebar: 0 0% 98%;
+     --sidebar-foreground: 222.2 84% 4.9%;
+-    --sidebar-primary: 222.2 47.4% 11.2%;
++    --sidebar-primary: 0 74% 48%;
+     --sidebar-primary-foreground: 210 40% 98%;
+     --sidebar-accent: 210 40% 96.1%;
+     --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+     --sidebar-border: 214.3 31.8% 91.4%;
+-    --sidebar-ring: 222.2 84% 4.9%;
++    --sidebar-ring: 0 74% 48%;
+ 
+     --radius: 0.5rem;
+ 
+@@ -194,7 +194,7 @@
+     --card-foreground: 210 40% 98%;
+     --popover: 217.2 32.6% 9%;
+     --popover-foreground: 215 20.2% 76.1%;
+-    --primary: 217 71% 40%;
++    --primary: 0 74% 48%;
+     --primary-foreground: 0 0% 100%;
+     --secondary: 217.2 32.6% 17.5%;
+     --secondary-foreground: 210 40% 98%;
+@@ -206,7 +206,7 @@
+     --destructive-foreground: var(--color-red-600);
+     --border: 217.2 32.6% 17.5%;
+     --input: 217.2 32.6% 17.5%;
+-    --ring: 217 71% 40%;
++    --ring: 0 74% 48%;
+     --chart-1: 220 70% 50%;
+     --chart-2: 160 60% 45%;
+     --chart-3: 30 80% 55%;
+@@ -221,20 +221,20 @@
+     --syntax-string: 20 90% 80%; /* peach/orange - strings & variables */
+     --syntax-keyword: 220 100% 65%; /* blue - keywords */
+ 
+-    /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
+-    --accent-from: 217 80% 45%;
+-    --accent-to: 217 100% 60%;
+-    --accent-glow: 217 90% 52%;
++    /* Accent gradient stops (aligned with brand hue 0 - red, darker for dark mode) */
++    --accent-from: 0 82% 50%;
++    --accent-to: 0 92% 62%;
++    --accent-glow: 0 88% 56%;
+ 
+     /* Sidebar */
+     --sidebar: 0 0% 3%;
+     --sidebar-foreground: 210 40% 98%;
+-    --sidebar-primary: 217 71% 40%;
++    --sidebar-primary: 0 74% 48%;
+     --sidebar-primary-foreground: 0 0% 100%;
+     --sidebar-accent: 217.2 32.6% 17.5%;
+     --sidebar-accent-foreground: 210 40% 98%;
+     --sidebar-border: 217.2 32.6% 17.5%;
+-    --sidebar-ring: 217 71% 40%;
++    --sidebar-ring: 0 74% 48%;
+     --success: var(--color-emerald-500);
+     --success-foreground: var(--color-emerald-600);
+     --info: var(--color-violet-500);

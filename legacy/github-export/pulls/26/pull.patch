@@ -1,0 +1,655 @@
+From cad6a525c59a46d87295f2b5ee73a3b109faeefb Mon Sep 17 00:00:00 2001
+From: flock-leader <derekgranito+flockleader@gmail.com>
+Date: Fri, 2 Oct 2026 16:03:44 -0700
+Subject: [PATCH 1/2] feat(skills): add evidence-led CTF workflow
+
+---
+ .claude/skills/solve-ctf-challenges/SKILL.md  | 151 ++++++++++++++++++
+ .../solve-ctf-challenges/agents/openai.yaml   |   4 +
+ .../references/field-playbook.md              |  81 ++++++++++
+ .../references/progress-template.md           |  87 ++++++++++
+ 4 files changed, 323 insertions(+)
+ create mode 100644 .claude/skills/solve-ctf-challenges/SKILL.md
+ create mode 100644 .claude/skills/solve-ctf-challenges/agents/openai.yaml
+ create mode 100644 .claude/skills/solve-ctf-challenges/references/field-playbook.md
+ create mode 100644 .claude/skills/solve-ctf-challenges/references/progress-template.md
+
+diff --git a/.claude/skills/solve-ctf-challenges/SKILL.md b/.claude/skills/solve-ctf-challenges/SKILL.md
+new file mode 100644
+index 00000000..f4408446
+--- /dev/null
++++ b/.claude/skills/solve-ctf-challenges/SKILL.md
+@@ -0,0 +1,151 @@
++---
++name: solve-ctf-challenges
++description: Solve authorized capture-the-flag and sandbox security challenges with an evidence-led workflow that preserves artifacts, maps trust boundaries, controls experiments, builds the smallest viable exploit chain, and proves the real flag. Use for live CTF targets, challenge source archives, packet captures, opaque network services, web or agent-security puzzles, exploit-chain debugging, flag validation, and honest postmortems. Do not use for targets without explicit challenge authorization.
++---
++
++# Solve CTF Challenges
++
++Treat a CTF as an evidence problem with a precise success predicate. Investigate only the
++supplied challenge scope, maintain a live human-readable record, and do not call a primitive
++or bundled test flag a win.
++
++## Hard rules
++
++1. Work only on the target, instance, artifacts, and accounts explicitly supplied for the
++   challenge. Stop if authorization or target identity is genuinely ambiguous.
++2. Never inspect unrelated browser history, personal accounts, credentials, or private host
++   state to find a missing target. Ask for the target URL, spawn page, or artifact instead.
++3. Prefer read-only discovery and the least-destructive exploit that proves the challenge.
++   Do not delete, poison, reset, upload, or persist unless the path requires it and the effect
++   stays inside the challenge instance.
++4. Treat shared instances as shared mutable state. Establish one operator or isolated
++   instances before making stateful changes.
++5. Keep facts, inferences, hypotheses, and inconclusive results visibly distinct.
++6. Continue until the defined success predicate is independently verified or a real external
++   blocker is established. Activity alone is not progress.
++
++## Start the evidence record first
++
++Create `.context/<challenge>-progress.md` before substantive probing. Use
++[references/progress-template.md](references/progress-template.md). The top of the file must
++always contain, in this order:
++
++1. a deliberately simple diagram of the challenge;
++2. the exact win condition and current win status;
++3. the top findings;
++4. attempts and what each established;
++5. prioritized TODOs.
++
++Update those top sections whenever the working theory changes. Put commands, response
++excerpts, packet identifiers, hashes, timestamps, and longer analysis below them. Never make
++the reader reconstruct current state from a chronological transcript.
++
++## Run the workflow
++
++### 1. Define scope and proof
++
++Record the supplied target, artifact names, account context, and restrictions. Write the
++victory condition as an observable predicate before testing. Examples include a live service
++returning a flag, an authoritative state object containing the required receipt, or a recovered
++file whose complete flag and hash are verified.
++
++Separate these states:
++
++- **primitive proven**: one vulnerability or capability works;
++- **chain proven**: the primitive reaches the intended final system;
++- **won**: the live, scoped challenge satisfies the victory predicate;
++- **independently verified**: a second read or clean reproduction confirms the result.
++
++### 2. Preserve inputs and identify the target
++
++For archives and captures, record filename, exact size, file type, and SHA-256 before analysis.
++List archive members before safe extraction and preserve the original. Analyze a working copy.
++
++For a live service, preflight its identity before sending an exploit: check the expected page,
++protocol, title, route, banner, or other challenge-specific marker. TCP acceptance does not
++prove the advertised protocol, and application silence does not prove an outage.
++
++### 3. Build an evidence model
++
++Map the shortest plausible route from attacker-controlled input to the winning state:
++
++```text
++INPUT -> PARSER/AGENT -> TRUST BOUNDARY -> PRIVILEGED SINK -> WIN PROOF
++```
++
++Maintain two compact tables:
++
++- a capability ledger with `proven`, `inferred`, `unknown`, and `resolved` entries;
++- an experiment matrix that changes one security-relevant variable per row.
++
++For each privileged field, identify the component that owns its vocabulary or validation.
++Extract accepted enum values from schemas, tool descriptions, source, or deliberate invalid
++sentinels before guessing plausible names. Interrogate the boundary that creates the trusted
++field, not merely the downstream consumer.
++
++### 4. Choose discriminating probes
++
++Rank candidate probes by expected information gain divided by cost and risk. Prefer a probe
++that separates competing explanations over one that merely repeats a symptom.
++
++After three misses on one branch:
++
++1. restate the win predicate;
++2. list the leading remaining explanations;
++3. mark confounded results inconclusive;
++4. stop equivalent low-information probes;
++5. choose the smallest orthogonal experiment.
++
++Do not name unobserved tools, endpoints, or fields inside exploit payloads. Guessed internals
++can redirect a model or confound the result. Use a simple business payload and isolate
++authorization-context manipulation from downstream content.
++
++### 5. Escalate deliberately
++
++Use this default order:
++
++1. passive/source-assisted discovery;
++2. clean stateless probes;
++3. authoritative schema and vocabulary discovery;
++4. controlled field or identity substitution;
++5. minimal exploit-chain assembly;
++6. persistent-state attacks, races, and replay only after clean paths are exhausted.
++
++Before a persistent or destructive step, record why it is necessary, its expected effect, how
++to recognize success, and whether rollback or a fresh instance exists.
++
++Use [references/field-playbook.md](references/field-playbook.md) for source-assisted web,
++opaque-service, packet-capture, and agent-security pivots.
++
++### 6. Prove the real win
++
++Assume flags bundled in source, fixtures, Docker images, or local development responses are
++test data unless the challenge explicitly says otherwise. A flag-shaped string is not enough.
++
++Before declaring victory:
++
++1. run the chain against the live scoped target;
++2. capture the complete flag from the authoritative output;
++3. reject known placeholder, fake, or test flags;
++4. independently re-read the state or reproduce the final step;
++5. record exactly which operator found and verified it.
++
++If a teammate wins, say **the team won**. Do not claim personal discovery of a path found by
++someone else. Preserve failed and inconclusive attempts when they explain why the final route
++was chosen.
++
++## Finish and hand off
++
++Leave the progress record with:
++
++- the simple diagram updated to the final chain;
++- `WON — independently verified` or a precise blocker;
++- sanitized reproduction steps;
++- artifact and recovered-object hashes where relevant;
++- confidence-qualified attribution;
++- failed branches worth avoiding;
++- the smallest useful lesson for the next challenge.
++
++Keep live secrets, credentials, target addresses, and flags in the gitignored `.context/`
++record. When converting durable behavior into repo documentation or a skill, generalize it and
++remove challenge-specific secrets.
+diff --git a/.claude/skills/solve-ctf-challenges/agents/openai.yaml b/.claude/skills/solve-ctf-challenges/agents/openai.yaml
+new file mode 100644
+index 00000000..030c497a
+--- /dev/null
++++ b/.claude/skills/solve-ctf-challenges/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Solve CTF Challenges"
++  short_description: "Evidence-led CTF investigation and flag proof"
++  default_prompt: "Use $solve-ctf-challenges to investigate this authorized CTF and prove the real flag."
+diff --git a/.claude/skills/solve-ctf-challenges/references/field-playbook.md b/.claude/skills/solve-ctf-challenges/references/field-playbook.md
+new file mode 100644
+index 00000000..bb93d95a
+--- /dev/null
++++ b/.claude/skills/solve-ctf-challenges/references/field-playbook.md
+@@ -0,0 +1,81 @@
++# Evidence-led CTF field playbook
++
++Load only the section matching the challenge surface. These are pivot patterns, not a checklist
++that must be exhausted.
++
++## Source-assisted web or service challenge
++
++1. Inventory routes, trust boundaries, workers, backing services, secrets flow, and privileged
++   sinks from source before fuzzing.
++2. Draw source-to-sink paths for every attacker-controlled field.
++3. Distinguish what is validated in the frontend, API, queue, worker, and final sink.
++4. Reproduce locally to prove a primitive, but preserve environment differences.
++5. Preflight the live target's identity before exploitation.
++6. Build one minimal chain and verify its final output through an authoritative route.
++
++When dependencies are stale, prefer a local compatibility shim or isolated harness. Do not
++modify challenge source merely to make the exploit appear successful.
++
++## Opaque or silent network service
++
++1. Distinguish transport reachability from application response.
++2. Try a small set of genuinely different standard handshakes and record raw behavior.
++3. Stop repeating HTTP/TLS variants after they cease adding information.
++4. Use full service/version detection or derive the protocol from supplied artifacts.
++5. Once identified, use a protocol-native client with the least-destructive command.
++
++Silence is a protocol clue, not proof that the service is dead.
++
++## Packet capture or forensic artifact
++
++1. Hash the original, inspect the archive manifest, and work on a copy.
++2. Establish capture duration, truncation, protocol hierarchy, endpoints, and conversations.
++3. Rank flows by fan-out, repeated failures, unusual volume, and trust-boundary crossings.
++4. Reassemble decisive streams and cite packet/stream identifiers for each claim.
++5. Extract complete raw fields; formatted or verbose displays may truncate ciphertext or blobs.
++6. Validate recovered objects locally by format, parser, cryptographic check, or hash.
++7. Derive the remote service and use of any credential from evidence; never spray recovered
++   material across unrelated protocols.
++8. State tool attribution with calibrated confidence when the executable is not directly shown.
++
++## Agent, workflow, or prompt-injection challenge
++
++1. Identify which agent/tool constructs each authorization-bearing field.
++2. Obtain exact schemas and enums from that owner through source, description disclosure, or an
++   invalid sentinel that elicits validation output.
++3. Keep a fixed, ordinary business payload while varying one authorization field.
++4. Record requested fields, actual serialized fields, selected tools, final sink inputs, and
++   authoritative state separately.
++5. Never infer an enum is invalid from a probe that also changed tool instructions or payload
++   semantics.
++6. Delay stored prompt injection until clean stateless variants are exhausted; persistent
++   context can contaminate every later result.
++7. Treat stochastic model behavior and deterministic tool enforcement as separate boundaries.
++
++## Exploit-chain verification
++
++Use a chain table:
++
++| Link | Input | Expected output | Proof | Status |
++|---|---|---|---|---|
++| 1 | controlled input | parser behavior | request/trace | proven |
++| 2 | transformed data | privileged primitive | log/state | proven |
++| 3 | primitive | live final action | authoritative output | unknown |
++| 4 | final action | complete flag | second read | unknown |
++
++Do not skip an unknown link by narrating that it probably works. Exercise it or mark the chain
++incomplete.
++
++## Failure review
++
++For each expensive dead end, capture:
++
++- the hypothesis;
++- the exact probe;
++- which variables changed;
++- the observed result;
++- whether the result was conclusive;
++- the next probe that would have separated the alternatives.
++
++The goal is not to celebrate every attempt. It is to prevent the same uninformative branch from
++consuming the next challenge.
+diff --git a/.claude/skills/solve-ctf-challenges/references/progress-template.md b/.claude/skills/solve-ctf-challenges/references/progress-template.md
+new file mode 100644
+index 00000000..247338d2
+--- /dev/null
++++ b/.claude/skills/solve-ctf-challenges/references/progress-template.md
+@@ -0,0 +1,87 @@
++# CTF progress-record template
++
++Copy this structure to `.context/<challenge>-progress.md`. Keep the first five sections at the
++top and current throughout the investigation.
++
++````markdown
++# <Challenge> — Investigation Record
++
++## Explain it like I just arrived
++
++```mermaid
++flowchart LR
++    A[What we control] --> B[Thing we must cross]
++    B --> C[Privileged action]
++    C --> D[Real flag]
++```
++
++One sentence: We can control ___, need to cross ___, and win only when ___.
++
++## Win status
++
++**NOT WON**
++
++Success predicate: `<exact observable condition>`
++
++Live target identity: `<unverified | verified by marker>`
++
++Independent verification: `<not run | result>`
++
++## Top findings
++
++- **PROVEN:** ...
++- **INFERRED:** ...
++- **UNKNOWN:** ...
++- **CORRECTION:** ...
++
++## Attempts
++
++| # | One changed variable | Result | What it establishes |
++|---|---|---|---|
++| 1 | Baseline | ... | ... |
++
++## TODOs, in priority order
++
++1. `[high information / low risk]` ...
++2. ...
++
++## Scope and evidence inventory
++
++- Supplied target: ...
++- Authorization basis: challenge-provided target/artifact
++- Original artifact: `<name, bytes, type, SHA-256>`
++- Working copy: ...
++- Shared state: `<unknown | isolated | shared>`
++
++## Capability ledger
++
++| State | Capability or unknown | Evidence |
++|---|---|---|
++| proven | ... | request/packet/source location |
++| unknown | ... | next discriminating probe |
++
++## Trust-boundary map
++
++| Attacker-controlled input | Transform/owner | Privileged field or sink | Evidence |
++|---|---|---|---|
++| ... | ... | ... | ... |
++
++## Evidence log
++
++Record timestamps, exact commands or requests, concise response excerpts, packet/stream IDs,
++hashes, and conclusions. Redact only in any version intended for commit.
++
++## Final reproduction
++
++1. ...
++
++## Honest retrospective
++
++- What actually unlocked the win: ...
++- What wasted time and why: ...
++- Who found the winning path: ...
++- Generalized lesson: ...
++````
++
++Use `WON — independently verified` only after the live success predicate and second check both
++pass. Otherwise retain `NOT WON`, even if a local exploit works or a flag-shaped fixture appears.
+
+From e392f1ae791b28b521296eb900a1b1bd8c79f247 Mon Sep 17 00:00:00 2001
+From: flock-leader <derekgranito+flockleader@gmail.com>
+Date: Mon, 5 Oct 2026 13:31:16 -0700
+Subject: [PATCH 2/2] docs(ctf): add Fullpwn setup and case study
+
+---
+ .claude/skills/solve-ctf-challenges/SKILL.md  |   4 +-
+ .../references/field-playbook.md              |  15 +++
+ README.md                                     |   4 +
+ docs/case-studies/fullpwn-sqli-to-system.md   |  88 +++++++++++++
+ docs/guides/htb-fullpwn-vpn-macos.md          | 120 ++++++++++++++++++
+ 5 files changed, 229 insertions(+), 2 deletions(-)
+ create mode 100644 docs/case-studies/fullpwn-sqli-to-system.md
+ create mode 100644 docs/guides/htb-fullpwn-vpn-macos.md
+
+diff --git a/.claude/skills/solve-ctf-challenges/SKILL.md b/.claude/skills/solve-ctf-challenges/SKILL.md
+index f4408446..2a2e5ee5 100644
+--- a/.claude/skills/solve-ctf-challenges/SKILL.md
++++ b/.claude/skills/solve-ctf-challenges/SKILL.md
+@@ -114,8 +114,8 @@ Use this default order:
+ Before a persistent or destructive step, record why it is necessary, its expected effect, how
+ to recognize success, and whether rollback or a fresh instance exists.
+ 
+-Use [references/field-playbook.md](references/field-playbook.md) for source-assisted web,
+-opaque-service, packet-capture, and agent-security pivots.
++Use [references/field-playbook.md](references/field-playbook.md) for private-lab routing,
++source-assisted web, opaque-service, packet-capture, and agent-security pivots.
+ 
+ ### 6. Prove the real win
+ 
+diff --git a/.claude/skills/solve-ctf-challenges/references/field-playbook.md b/.claude/skills/solve-ctf-challenges/references/field-playbook.md
+index bb93d95a..c950acc0 100644
+--- a/.claude/skills/solve-ctf-challenges/references/field-playbook.md
++++ b/.claude/skills/solve-ctf-challenges/references/field-playbook.md
+@@ -3,6 +3,21 @@
+ Load only the section matching the challenge surface. These are pivot patterns, not a checklist
+ that must be exhausted.
+ 
++## Private lab or VPN target
++
++1. Confirm that the profile belongs to the exact event or lab that issued the target. A valid
++   profile for a different HTB product can connect successfully while installing the wrong routes.
++2. Verify the target route independently of the client's green status. On macOS, use
++   `route -n get <target-ip>` and require the expected `utun` interface and lab gateway.
++3. Verify the VPN server's outer route too. It should use the physical network interface; if it
++   uses another commercial VPN tunnel, the nested connection may flap or silently black-hole.
++4. Disconnect competing VPNs through their normal UI, then reconnect the lab profile. Do not kill
++   helpers, delete routes, or approve unexpected privilege prompts merely to force the state.
++5. Distinguish routing from service reachability: a correct route is proof of network placement;
++   ping or one closed port is not proof that the target is down.
++6. Keep one OpenVPN session active. Repeated disconnects, extra tunnel interfaces, or stale routes
++   justify a clean client reconnect before more target probing.
++
+ ## Source-assisted web or service challenge
+ 
+ 1. Inventory routes, trust boundaries, workers, backing services, secrets flow, and privileged
+diff --git a/README.md b/README.md
+index bf471e9f..9a7914bc 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,10 @@ docker build --target runner -t cogni-node-template:local .
+ - `docs/guides/new-node-styling.md` — first-pass rebrand for a minted node.
+ - `docs/guides/add-secret.md` — node-owned secret declarations and typed consumption.
+ - `docs/guides/contribute-knowledge.md` — when reusable findings should become durable node knowledge.
++- `docs/guides/htb-fullpwn-vpn-macos.md` — connect a Mac to an HTB CTF Fullpwn network and
++  diagnose competing-VPN routes.
++- `docs/case-studies/fullpwn-sqli-to-system.md` — sanitized evidence-led case study from web SQL
++  injection through Windows SYSTEM.
+ 
+ ## Conductor workspaces
+ 
+diff --git a/docs/case-studies/fullpwn-sqli-to-system.md b/docs/case-studies/fullpwn-sqli-to-system.md
+new file mode 100644
+index 00000000..32380256
+--- /dev/null
++++ b/docs/case-studies/fullpwn-sqli-to-system.md
+@@ -0,0 +1,88 @@
++---
++id: case-study.fullpwn-sqli-system
++type: case-study
++title: Evidence-led Fullpwn from SQL injection to Windows SYSTEM
++status: draft
++trust: draft
++summary: Sanitized lessons from an authorized two-flag Windows Fullpwn investigation.
++read_when: Planning or reviewing an authorized Windows web-to-SYSTEM CTF chain.
++owner: derekg1729
++created: 2026-10-05
++verified: 2026-10-05
++tags: [ctf, windows, sqli, mssql, seimpersonate]
++---
++
++# Evidence-led Fullpwn from SQL injection to Windows SYSTEM
++
++This is a sanitized case study from an authorized, team-exclusive HTB CTF instance. The complete
++target address, VPN profile, requests, flags, and proof hashes remain in a gitignored `.context`
++record. They are intentionally absent from this public repository.
++
++## Outcome
++
++Both live flag files were read from the scoped target and independently hashed. The final chain was:
++
++```text
++event VPN -> web SQL injection -> MSSQL sysadmin -> OS command execution
++          -> service account with SeImpersonatePrivilege -> SYSTEM -> both live flags
++```
++
++## What established each link
++
++| Link | Decisive evidence |
++| --- | --- |
++| Network placement | The target subnet routed through the HTB tunnel, while the VPN server itself routed through the physical interface. |
++| Initial access | A controlled login input changed authentication failure to success. |
++| Data-layer control | An authenticated search input accepted a four-column `UNION` and returned server-selected values. |
++| Database privilege | The application connection resolved to SQL Server `sa`/`dbo` with the `sysadmin` role. |
++| OS execution | Temporarily enabled `xp_cmdshell` returned the MSSQL service identity and host privilege list. |
++| Escalation primitive | The service token had enabled `SeImpersonatePrivilege`. |
++| SYSTEM execution | A token-impersonation helper returned `NT AUTHORITY\SYSTEM` before launching the proof command. |
++| Win proof | Each flag was read from the live target and checked again with an on-target SHA-256 calculation. |
++
++The user-level flag was readable from a public user profile. The SYSTEM flag required access to the
++Administrator profile, so database command execution alone did not satisfy the two-flag win
++condition.
++
++## The shortest successful path
++
++1. Establish the correct event VPN route before interpreting service behavior.
++2. Fingerprint only a focused service set; identify IIS, MSSQL, SMB/RPC, and WinRM.
++3. Use the login injection to obtain the application session expected by the account-search API.
++4. Use a typed `UNION` probe to map result columns and prove the database identity and role.
++5. Enable `xp_cmdshell` only after proving SQL `sysadmin`; capture commands through a temporary
++   table so every result remains visible in the existing web response.
++6. Read and hash the user flag.
++7. Inspect the service token, observe `SeImpersonatePrivilege`, and use the compatible impersonation
++   primitive to launch a single SYSTEM proof command.
++8. Read and separately hash the SYSTEM flag.
++9. Remove staged binaries and the temporary SQL table, then disable both `xp_cmdshell` and advanced
++   options and verify their effective values returned to zero.
++
++## Dead ends worth preserving
++
++- A commercial VPN remained the default route. The HTB client appeared connected, but its outer UDP
++  session was nested through the commercial tunnel and stopped passing traffic after a few minutes.
++  Verifying both the target route and the VPN server's outer route exposed the conflict.
++- A reused private IP was not evidence that an unrelated public write-up or static flag belonged to
++  this instance. Only the live target could prove the flags.
++- TCP acceptance and a tunnel interface were not enough to prove correct network placement. Route
++  ownership and a target identity marker were required.
++- One impersonation implementation found the privilege but timed out while triggering its named-pipe
++  path. A second implementation compatible with the target OS acquired SYSTEM immediately.
++- Recursive filesystem searches consumed time and added little information. Known Windows flag paths
++  and bounded directory checks were more discriminating.
++
++## Reusable lessons
++
++- Write the exact two-flag success predicate before probing; a foothold or one flag is not a win.
++- Keep routing evidence separate from application evidence.
++- Prove SQL type shape with `NULL` before inserting metadata expressions into a `UNION`.
++- Database `sysadmin` is a capability boundary, not automatically SYSTEM; inspect the service token.
++- When a privilege primitive fails, preserve its exact failure and change implementation, not the
++  underlying hypothesis.
++- Independently verify live flags and clean up every configuration or file introduced by the exploit.
++
++For the operational VPN procedure, see
++[Connect macOS to an HTB CTF Fullpwn VPN](../guides/htb-fullpwn-vpn-macos.md). For the investigation
++record structure and proof standard, use the repository's `solve-ctf-challenges` skill.
+diff --git a/docs/guides/htb-fullpwn-vpn-macos.md b/docs/guides/htb-fullpwn-vpn-macos.md
+new file mode 100644
+index 00000000..5f695c31
+--- /dev/null
++++ b/docs/guides/htb-fullpwn-vpn-macos.md
+@@ -0,0 +1,120 @@
++---
++id: guide.htb-fullpwn-vpn-macos
++type: guide
++title: Connect macOS to an HTB CTF Fullpwn VPN
++status: draft
++trust: draft
++summary: Install OpenVPN Connect, import the event-specific profile, verify the private route, and diagnose competing VPNs.
++read_when: An HTB CTF Fullpwn target has a private IP address and must be reached from macOS.
++owner: derekg1729
++created: 2026-10-05
++verified: 2026-10-05
++tags: [ctf, htb, openvpn, macos]
++---
++
++# Connect macOS to an HTB CTF Fullpwn VPN
++
++Use this guide when an authorized HTB CTF target has a private address such as `10.x.x.x`.
++Fullpwn machines require the CTF event VPN; a public-IP Docker challenge usually does not.
++
++## Quick setup
++
++1. Install [OpenVPN Connect for macOS](https://openvpn.net/client/). The
++   [official macOS installation guide](https://openvpn.net/connect-docs/macos-installation-guide.html)
++   covers Intel and Apple silicon Macs.
++2. Open the HTB CTF event, enter the **Fullpwn** category, and click **Connect to HTB** in the
++   upper-right corner.
++3. Choose **OpenVPN** and download the event-specific `.ovpn` profile.
++4. Double-click the profile, import it into OpenVPN Connect, and accept the application's data-use
++   prompt if this is its first launch.
++5. Enable the imported profile and approve the macOS VPN permission when prompted.
++6. Keep commercial or corporate VPNs disconnected unless the event explicitly requires nesting.
++
++The profile must come from the active CTF event's Fullpwn area. A Machines, Academy, Starting
++Point, or unrelated CTF profile can connect normally while routing the wrong lab network.
++
++Treat the `.ovpn` file as a credential: do not commit it, paste it into chat, or publish its inline
++certificates and private key.
++
++## Verify the route
++
++OpenVPN's **Connected** status is necessary but not sufficient. Verify the target route:
++
++```bash
++route -n get <target-ip>
++```
++
++A working HTB route normally shows:
++
++- an interface named `utun` followed by a number;
++- an HTB tunnel gateway, commonly in `10.10.0.0/16`;
++- a route covering the target's private subnet.
++
++Then run a light reachability check:
++
++```bash
++ping -c 2 <target-ip>
++nc -vz -w 3 <target-ip> <known-port>
++```
++
++Some targets block ICMP or have no service on the chosen port, so route correctness is the primary
++proof. Do not conclude that the VPN failed from one silent probe.
++
++## Optional OpenVPN Connect CLI
++
++OpenVPN Connect 3.3 and newer includes a supported macOS CLI. Accept the data-use prompt in the UI
++before using it.
++
++```bash
++OPENVPN_CONNECT_BIN="/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"
++
++"$OPENVPN_CONNECT_BIN" --version
++"$OPENVPN_CONNECT_BIN" --list-profiles
++"$OPENVPN_CONNECT_BIN" --import-profile="/absolute/path/event-profile.ovpn" --name="HTB CTF"
++"$OPENVPN_CONNECT_BIN" --list-settings
++```
++
++The [official CLI reference](https://openvpn.net/connect-docs/command-line-functionality-macos.html)
++documents profile import, removal, and application settings. Avoid command-line password arguments:
++they can leak into process listings and shell history.
++
++## Fix a competing-VPN route
++
++Symptoms include high latency, a connection that dies every few minutes, or a target route that
++uses the wrong tunnel.
++
++1. Disconnect the commercial or corporate VPN through its normal menu.
++2. Confirm the ordinary default route uses a physical interface such as `en0` or `en10`:
++
++   ```bash
++   netstat -rn -f inet | head -20
++   ```
++
++3. Reconnect the HTB profile.
++4. Re-run `route -n get <target-ip>`.
++5. If possible, resolve the `remote` host named in the profile and confirm that its public address
++   uses the physical interface, not another `utun` tunnel.
++
++Do not force-quit VPN helpers or manually delete routes while a client owns them. Unexpected admin
++prompts are a reason to pause and use the application's normal disconnect control.
++
++If stale tunnel interfaces or repeated reconnects remain, fully disconnect all OpenVPN sessions,
++restart the client, and connect only the event profile. HTB's
++[connection troubleshooting guide](https://help.hackthebox.com/en/articles/5185536-connection-troubleshooting)
++also recommends keeping a single active OpenVPN instance.
++
++## Official references
++
++- [HTB CTF User's Guide](https://help.hackthebox.com/en/articles/5200851-ctf-user-s-guide) —
++  Fullpwn machine spawning and the event VPN download location.
++- [Understanding the Hack The Box VPN](https://help.hackthebox.com/en/articles/8602725-understanding-the-hack-the-box-vpn) —
++  why private targets need HTB's internal lab route and the recommended macOS client.
++- [HTB Connection Troubleshooting](https://help.hackthebox.com/en/articles/5185536-connection-troubleshooting) —
++  stale tunnels, incorrect packs, negotiation failures, and route conflicts.
++- [OpenVPN Connect download](https://openvpn.net/client/) — official client download.
++- [OpenVPN Connect macOS installation](https://openvpn.net/connect-docs/macos-installation-guide.html) —
++  installation, profile import, and permission prompts.
++- [OpenVPN Connect macOS CLI](https://openvpn.net/connect-docs/command-line-functionality-macos.html) —
++  supported profile and settings commands.
++- [OpenVPN Connect macOS FAQ](https://openvpn.net/connect-docs/macos-faq.html) — client limitations
++  and profile-import help.

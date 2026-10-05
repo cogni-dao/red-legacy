@@ -1,0 +1,2714 @@
+diff --git a/.claude/skills/node-styling/SKILL.md b/.claude/skills/node-styling/SKILL.md
+index 64b51c8b..6bbbe821 100644
+--- a/.claude/skills/node-styling/SKILL.md
++++ b/.claude/skills/node-styling/SKILL.md
+@@ -65,10 +65,12 @@ export const metadata: Metadata = {
+ };
+ ```
+ 
+-### 4. Homepage (`src/app/(public)/page.tsx`) — the main event
+-The public landing page. Hero, CTAs, and content must sell the mission to someone who has never heard of it. Signed-in users redirect to `/chat`.
++### 4. Homepage (`src/features/home/content.ts`) — the main event
++The template ships a **full, multi-section landing page** out of the box — animated hero + live agent-stream console, a showcase-cards grid, a public activity feed of explainable signals, and a stats band. This is the same framework the Poly and Resy nodes use. You do **not** design a page from scratch and you do **not** rebuild the layout.
+ 
+-**This is a real design task — invoke [`/frontend-design`](../../../.claude/skills) (the frontend-design skill) to build a distinctive, production-grade landing page** for the mission. Do not ship the template hero with the node name find-replaced. Picture the mission, then design the page that makes a stranger get it in five seconds.
++**Customize the page by rewriting `app/src/features/home/content.ts`.** It is the single source of all homepage copy and placeholder data (`HERO`, `AGENT_STREAM_SEQUENCES`, `SHOWCASE_*`, `FEED_*`, `STATS`). Walk it top to bottom and replace every value with copy that sells *this* node's mission to a stranger in five seconds. Keep the data shapes; change the words. The hue from step 2 flows through every section automatically.
++
++The layout components in `src/features/home/components/*` are generic — only touch them to add or remove a whole section. If you decide the mission needs a genuinely different layout, *then* reach for [`/frontend-design`](../../../.claude/skills); otherwise content + hue is the first-class path. Signed-in users redirect to `/chat`.
+ 
+ ### 5. Chat suggested messages (`src/features/ai/components/ChatComposerExtras.tsx`)
+ Tailor the welcome suggestions to the node's domain. A prediction node shows market prompts; a reservation node shows booking prompts; a knowledge node shows discovery/search prompts. Generic prompts here are the same anti-pattern as a generic homepage.
+@@ -77,12 +79,13 @@ Tailor the welcome suggestions to the node's domain. A prediction node shows mar
+ - [ ] Lucide icon chosen *for the mission* — `AppHeader.tsx` + `AppSidebar.tsx`
+ - [ ] Primary hue set in `tailwind.css` (both `:root` and `.dark`, accent + sidebar follow)
+ - [ ] `layout.tsx` metadata: mission-expressing title + description
+-- [ ] **Homepage redesigned for the mission via `/frontend-design`** — not a recolored template
++- [ ] **`content.ts` fully rewritten for the mission** — every section (hero, agent stream, showcase cards, activity feed, stats) speaks to *this* node, not the template defaults
+ - [ ] Chat suggestions tailored to the domain
+ - [ ] `pnpm check` passes
+ - [ ] Dev server (or candidate) shows the right icon, colors, name, AND a homepage a stranger understands
+ 
+ ## Anti-patterns
+-- Changing only the icon + hue and calling the node "customized." (90% of the job is the homepage + chat.)
+-- A homepage that is the template hero with the name swapped.
++- Changing only the icon + hue and calling the node "customized." (90% of the job is `content.ts` + chat.)
++- Shipping `content.ts` with the template defaults still in it (the "community-owned" hero, the v2-roadmap cards). A stranger should see *your* mission, not the scaffold.
++- Rebuilding the homepage layout from scratch when content + hue would have done the job.
+ - An icon/palette with no stated connection to the mission.
+diff --git a/.github/workflows/pr-build.yml b/.github/workflows/pr-build.yml
+index 7d8842b1..4b5e357a 100644
+--- a/.github/workflows/pr-build.yml
++++ b/.github/workflows/pr-build.yml
+@@ -5,14 +5,38 @@ on:
+   merge_group:
+   push:
+     branches: [main]
++  # Operator-dispatched TRUSTED build of an approved PR head — MONOREPO PARITY
++  # (bug.5057). A fork PR's `pull_request` run is read-only and cannot push the
++  # image (should_push=false). The operator (POST /api/v1/vcs/run-ci →
++  # dispatchPrBuild), AFTER RBAC approval, dispatches THIS workflow in the base
++  # repo (packages:write) to build head_repo@head_sha → `sha-<head_sha>` so a fork
++  # PR is flightable. Identical trusted-build path to the monorepo's pr-build; the
++  # fork `should_push=false` self-push guard below is unchanged (forks never push
++  # themselves — only the RBAC-gated operator dispatch does).
++  workflow_dispatch:
++    inputs:
++      head_repo:
++        description: "PR head repo owner/name (fork or same-repo)"
++        required: true
++        type: string
++      head_sha:
++        description: "PR head SHA (40-char hex) — built + tagged sha-<head_sha>"
++        required: true
++        type: string
++      pr_number:
++        description: "PR number in this repo (informational)"
++        required: false
++        type: string
+ 
+ permissions:
+   contents: read
+   packages: write
+ 
+ concurrency:
+-  group: pr-build-${{ github.workflow }}-${{ github.ref }}
+-  cancel-in-progress: true
++  # Never cancel push:main (publishes the deployable) or a trusted dispatch (keyed
++  # by head_sha so concurrent fork builds don't evict each other).
++  group: pr-build-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.ref }}
++  cancel-in-progress: ${{ github.event_name != 'push' && github.event_name != 'workflow_dispatch' }}
+ 
+ jobs:
+   resolve:
+@@ -20,6 +44,7 @@ jobs:
+     outputs:
+       source_sha: ${{ steps.r.outputs.source_sha }}
+       checkout_ref: ${{ steps.r.outputs.checkout_ref }}
++      checkout_repo: ${{ steps.r.outputs.checkout_repo }}
+       image_name: ${{ steps.r.outputs.image_name }}
+       image_tag: ${{ steps.r.outputs.image_tag }}
+       should_push: ${{ steps.r.outputs.should_push }}
+@@ -37,8 +62,13 @@ jobs:
+           REPOSITORY: ${{ github.repository }}
+           REPOSITORY_OWNER: ${{ github.repository_owner }}
+           REF_NAME: ${{ github.ref_name }}
++          DISPATCH_HEAD_REPO: ${{ inputs.head_repo }}
++          DISPATCH_HEAD_SHA: ${{ inputs.head_sha }}
+         run: |
+           set -euo pipefail
++          # checkout_repo defaults to THIS repo; only an operator workflow_dispatch
++          # of an approved (possibly fork) PR head overrides it.
++          checkout_repo="$REPOSITORY"
+           if [ "$EVENT_NAME" = "pull_request" ]; then
+             source_sha="$PR_HEAD_SHA"
+             checkout_ref="$PR_HEAD_SHA"
+@@ -58,6 +88,22 @@ jobs:
+             checkout_ref="$PUSH_SHA"
+             ref_name="$REF_NAME"
+             should_push=true
++          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
++            # Operator-dispatched trusted build of an approved PR head (monorepo
++            # parity). Build head_repo (fork or same-repo) @ head_sha and PUSH to
++            # THIS repo's GHCR so the operator can flight `sha-<head_sha>`. RBAC
++            # (node.flight) was enforced before dispatch.
++            if [[ ! "$DISPATCH_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
++              echo "::error::head_sha must be a 40-char hex SHA"; exit 1
++            fi
++            if [[ ! "$DISPATCH_HEAD_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
++              echo "::error::head_repo must be owner/name"; exit 1
++            fi
++            source_sha="$DISPATCH_HEAD_SHA"
++            checkout_ref="$DISPATCH_HEAD_SHA"
++            checkout_repo="$DISPATCH_HEAD_REPO"
++            ref_name="pr-dispatch"
++            should_push=true
+           else
+             echo "::error::Unsupported event: $EVENT_NAME"
+             exit 1
+@@ -68,6 +114,7 @@ jobs:
+ 
+           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+           echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
++          echo "checkout_repo=$checkout_repo" >> "$GITHUB_OUTPUT"
+           echo "image_name=ghcr.io/${owner_lc}/${repo_lc}" >> "$GITHUB_OUTPUT"
+           echo "image_tag=sha-${source_sha}" >> "$GITHUB_OUTPUT"
+           echo "should_push=$should_push" >> "$GITHUB_OUTPUT"
+@@ -84,6 +131,7 @@ jobs:
+       - name: Checkout
+         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+         with:
++          repository: ${{ needs.resolve.outputs.checkout_repo }}
+           ref: ${{ needs.resolve.outputs.checkout_ref }}
+ 
+       - name: Detect node image targets
+@@ -102,6 +150,7 @@ jobs:
+       - name: Checkout
+         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+         with:
++          repository: ${{ needs.resolve.outputs.checkout_repo }}
+           ref: ${{ needs.resolve.outputs.checkout_ref }}
+ 
+       - name: Set up pnpm
+@@ -178,6 +227,7 @@ jobs:
+       - name: Checkout
+         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+         with:
++          repository: ${{ needs.resolve.outputs.checkout_repo }}
+           ref: ${{ needs.resolve.outputs.checkout_ref }}
+ 
+       - name: Download build fragments
+diff --git a/README.md b/README.md
+index d1c774fe..bf471e9f 100644
+--- a/README.md
++++ b/README.md
+@@ -47,3 +47,15 @@ export COGNI_TEMPLATE_ROOT="$HOME/dev/cogni-template"
+ ```
+ 
+ The operator consumes the pushed digest and owns URL/DNS/deployment state.
++
++## Inheriting from node-template (3-tier sync)
++
++The operator keeps every node aligned with `node-template` automatically (a GitHub App webhook fires on each node-template release). Changes propagate in **three tiers, by path** — know which tier your edit lands in:
++
++| Tier | Paths | What happens to your edit |
++| --- | --- | --- |
++| **1 — CI contract** | `.github/workflows/{ci,pr-build,pr-lint}.yaml`, `scripts/check-node-ci-workflow.mjs` | **Force-synced** from node-template. Do not diverge here; CI fixes land upstream first. |
++| **2 — Substrate** | `app/src/app/api/**`, `app/src/shared/**`, `app/src/bootstrap/**`, `graphs/**`, `packages/**` | **Auto-merged** from node-template each release (conflict-free); you inherit framework + cognition improvements. |
++| **3 — Your node** | `app/src/app/(public)/**`, `app/src/features/home/**`, branding/theme, `.cogni/repo-spec.yaml`, `.cogni/persona/**` | **Never synced** — build your node's identity, homepage, and features here in stability. |
++
++The Tier-3 carve-out is declared in `.cogni/sync-manifest.yaml#node_local` (data, not hardcoded), so the boundary moves with the template. Full contract: the operator knowledge entry `node-template-sync-contract`.
+diff --git a/app/src/adapters/server/ai/codex/codex-llm.adapter.ts b/app/src/adapters/server/ai/codex/codex-llm.adapter.ts
+index 6b428e89..eb3bceee 100644
+--- a/app/src/adapters/server/ai/codex/codex-llm.adapter.ts
++++ b/app/src/adapters/server/ai/codex/codex-llm.adapter.ts
+@@ -67,19 +67,6 @@ export class CodexLlmAdapter implements LlmService {
+     private readonly mcpConfig?: CodexMcpConfig
+   ) {}
+ 
+-  async completion(
+-    params: Parameters<LlmService["completion"]>[0]
+-  ): ReturnType<LlmService["completion"]> {
+-    const { stream, final } = await this.completionStream({
+-      ...params,
+-    });
+-    // Drain stream, collect text
+-    for await (const _event of stream) {
+-      // just drain
+-    }
+-    return final;
+-  }
+-
+   async completionStream(params: CompletionStreamParams): Promise<{
+     stream: AsyncIterable<ChatDeltaEvent>;
+     final: Promise<LlmCompletionResult>;
+diff --git a/app/src/adapters/server/ai/litellm.adapter.ts b/app/src/adapters/server/ai/litellm.adapter.ts
+index c6659224..06db40a3 100644
+--- a/app/src/adapters/server/ai/litellm.adapter.ts
++++ b/app/src/adapters/server/ai/litellm.adapter.ts
+@@ -148,246 +148,6 @@ function getLitellmCallIdFromHeaders(response: Response): string | undefined {
+ }
+ 
+ export class LiteLlmAdapter implements LlmService {
+-  async completion(
+-    params: Parameters<LlmService["completion"]>[0]
+-  ): ReturnType<LlmService["completion"]> {
+-    // Model must be provided by caller (route validates via contract)
+-    if (!params.model) {
+-      throw new Error("LiteLLM completion requires model parameter");
+-    }
+-    const model = params.model;
+-    const temperature = params.temperature ?? DEFAULT_TEMPERATURE;
+-    const maxTokens = params.maxTokens ?? DEFAULT_MAX_TOKENS;
+-
+-    // Extract caller data for user attribution and correlation (cost tracking in LiteLLM)
+-    const {
+-      billingAccountId,
+-      requestId,
+-      traceId,
+-      sessionId,
+-      userId,
+-      maskContent,
+-    } = params.caller;
+-
+-    // Canonical messages for prompt hash (role + content only per AI_SETUP_SPEC.md)
+-    const canonicalMessages = params.messages.map((msg) => ({
+-      role: msg.role,
+-      content: msg.content,
+-    }));
+-
+-    // Compute prompt hash BEFORE adding metadata (per AI_SETUP_SPEC.md)
+-    const promptHash = computePromptHash({
+-      model,
+-      messages: canonicalMessages,
+-      temperature,
+-      maxTokens,
+-    });
+-
+-    // Convert core Messages to LiteLLM format (includes tool fields for agentic loop)
+-    const liteLlmMessages = params.messages.map((msg) => {
+-      const base: Record<string, unknown> = {
+-        role: msg.role,
+-        content: msg.content,
+-      };
+-      // Assistant messages with tool calls (OpenAI format)
+-      if (msg.toolCalls && msg.toolCalls.length > 0) {
+-        base.tool_calls = msg.toolCalls.map((tc) => ({
+-          id: tc.id,
+-          type: "function",
+-          function: {
+-            name: tc.name,
+-            arguments: tc.arguments,
+-          },
+-        }));
+-      }
+-      // Tool result messages need tool_call_id
+-      if (msg.role === "tool" && msg.toolCallId) {
+-        base.tool_call_id = msg.toolCallId;
+-      }
+-      return base;
+-    });
+-
+-    const requestBody = {
+-      model,
+-      messages: liteLlmMessages,
+-      temperature,
+-      max_tokens: maxTokens,
+-      user: billingAccountId, // LiteLLM user tracking for cost attribution
+-      metadata: {
+-        cogni_billing_account_id: billingAccountId,
+-        request_id: requestId,
+-        // existing_trace_id: attach observations to decorator's trace without modifying it
+-        existing_trace_id: traceId,
+-        ...(sessionId && { session_id: sessionId }),
+-        ...(userId && { trace_user_id: userId }),
+-        ...(maskContent && { mask_input: true, mask_output: true }),
+-      },
+-    };
+-
+-    const env = serverEnv();
+-    // Validate runtime secrets at adapter boundary (not in serverEnv to avoid breaking Next.js build)
+-    assertRuntimeSecrets(env);
+-
+-    let response: Response;
+-    try {
+-      // HTTP call to LiteLLM with timeout enforcement
+-      // Uses LITELLM_MASTER_KEY (server-only secret) - never expose per-user virtual keys
+-      response = await fetch(`${env.LITELLM_BASE_URL}/v1/chat/completions`, {
+-        method: "POST",
+-        headers: {
+-          "Content-Type": "application/json",
+-          Authorization: `Bearer ${env.LITELLM_MASTER_KEY}`,
+-          ...(params.spendLogsMetadata && {
+-            "x-litellm-spend-logs-metadata": JSON.stringify(
+-              params.spendLogsMetadata
+-            ),
+-          }),
+-        },
+-        body: JSON.stringify(requestBody),
+-        /** 30 second timeout */
+-        signal: AbortSignal.timeout(30000),
+-      });
+-    } catch (error) {
+-      // Handle fetch errors (network, timeout, abort)
+-      if (error instanceof Error) {
+-        if (error.name === "AbortError" || error.name === "TimeoutError") {
+-          logger.warn(
+-            { requestId, traceId, model, rootCauseKind: "timeout" },
+-            "adapter.litellm.network_error"
+-          );
+-          throw new LlmError(`LiteLLM request timed out`, "timeout", 408);
+-        }
+-        const causeCode = (error.cause as { code?: string } | undefined)?.code;
+-        logger.warn(
+-          {
+-            requestId,
+-            traceId,
+-            model,
+-            rootCauseKind: "network",
+-            errorMessage: error.message,
+-            ...(causeCode && { causeCode }),
+-          },
+-          "adapter.litellm.network_error"
+-        );
+-        throw new LlmError(
+-          `LiteLLM network error: ${error.message}`,
+-          "unknown"
+-        );
+-      }
+-      throw new LlmError("LiteLLM completion failed: Unknown error", "unknown");
+-    }
+-
+-    // Handle HTTP errors with typed LlmError (per AI_SETUP_SPEC.md)
+-    if (!response.ok) {
+-      const kind = classifyLlmErrorFromStatus(response.status);
+-      const responseExcerpt = await readErrorResponseExcerpt(response);
+-      // Operator log: includes private root cause for debugging (never sent to clients)
+-      logger.warn(
+-        {
+-          statusCode: response.status,
+-          kind,
+-          requestId,
+-          traceId,
+-          model,
+-          provider: extractProviderFromModel(model),
+-          responseExcerpt,
+-        },
+-        "adapter.litellm.http_error"
+-      );
+-      throw new LlmError(
+-        `LiteLLM API error: ${response.status} ${response.statusText}`,
+-        kind,
+-        response.status
+-      );
+-    }
+-
+-    // Read cost and call ID from response headers
+-    const providerCostFromHeader = getProviderCostFromHeaders(response);
+-    const litellmCallId = getLitellmCallIdFromHeaders(response);
+-
+-    const data = (await response.json()) as {
+-      id?: string;
+-      model?: string;
+-      choices: { message: { content: string }; finish_reason?: string }[];
+-      usage: {
+-        prompt_tokens: number;
+-        completion_tokens: number;
+-        total_tokens?: number;
+-      };
+-    };
+-
+-    if (
+-      !data.choices ||
+-      data.choices.length === 0 ||
+-      !data.choices[0]?.message ||
+-      typeof data.choices[0].message.content !== "string"
+-    ) {
+-      throw new LlmError("Invalid response from LiteLLM", "unknown");
+-    }
+-
+-    // Build result object conditionally to satisfy exactOptionalPropertyTypes
+-    const promptTokens = Number(data.usage?.prompt_tokens) || 0;
+-    const completionTokens = Number(data.usage?.completion_tokens) || 0;
+-    const totalTokens = data.usage?.total_tokens
+-      ? Number(data.usage.total_tokens)
+-      : promptTokens + completionTokens;
+-
+-    // Extract resolved model from response (may differ from requested model)
+-    const resolvedModel = data.model ?? model;
+-    const resolvedProvider = extractProviderFromModel(resolvedModel);
+-    const resolvedDisplayName = await lookupDisplayName(model);
+-
+-    const result: Awaited<ReturnType<LlmService["completion"]>> = {
+-      message: {
+-        role: "assistant",
+-        content: data.choices[0].message.content,
+-      },
+-      usage: {
+-        promptTokens,
+-        completionTokens,
+-        totalTokens,
+-      },
+-      providerMeta: data as unknown as Record<string, unknown>,
+-      promptHash,
+-      resolvedProvider,
+-      resolvedModel,
+-      ...(resolvedDisplayName && { resolvedDisplayName }),
+-    };
+-
+-    // Add optional fields only when present
+-    if (data.choices[0].finish_reason) {
+-      result.finishReason = data.choices[0].finish_reason;
+-    }
+-
+-    if (typeof providerCostFromHeader === "number") {
+-      result.providerCostUsd = providerCostFromHeader;
+-    }
+-
+-    // USAGE_UNIT_IS_LITELLM_CALL_ID: header is the ONLY source.
+-    // Do NOT fall back to data.id (response body) — it may differ from
+-    // spend_logs.request_id. Missing header = bug, fail deterministically.
+-    if (litellmCallId) {
+-      result.litellmCallId = litellmCallId;
+-    }
+-
+-    // Sanitized adapter log (no content, bounded fields only)
+-    logger.info(
+-      {
+-        model: resolvedModel,
+-        provider: resolvedProvider,
+-        tokensUsed: totalTokens,
+-        finishReason: result.finishReason,
+-        hasCost: typeof providerCostFromHeader === "number",
+-        hasCallId: !!result.litellmCallId,
+-        contentLength: data.choices[0].message.content.length,
+-        promptHash,
+-      },
+-      "adapter.litellm.completion_result"
+-    );
+-
+-    return result;
+-  }
+-
+   async completionStream(
+     params: Parameters<LlmService["completionStream"]>[0]
+   ): ReturnType<LlmService["completionStream"]> {
+@@ -547,19 +307,25 @@ export class LiteLlmAdapter implements LlmService {
+     if (!response.ok) {
+       const kind = classifyLlmErrorFromStatus(response.status);
+       const responseExcerpt = await readErrorResponseExcerpt(response);
++      // Operator-fault upstream failures (402 unfunded provider account, 5xx
++      // outage) are loud: they page, not whisper. Benign client-ish 4xx (404
++      // model-not-found, 400) stay at warn. See bug.5056 / FAULT_PARTY_BEFORE_BUCKET.
++      const isOperatorFault = response.status === 402 || response.status >= 500;
+       // Operator log: includes private root cause for debugging (never sent to clients)
+-      logger.warn(
+-        {
+-          statusCode: response.status,
+-          kind,
+-          requestId,
+-          traceId,
+-          model,
+-          provider: extractProviderFromModel(model),
+-          responseExcerpt,
+-        },
+-        "adapter.litellm.stream_http_error"
+-      );
++      const httpErrorLog = {
++        statusCode: response.status,
++        kind,
++        requestId,
++        traceId,
++        model,
++        provider: extractProviderFromModel(model),
++        responseExcerpt,
++      };
++      if (isOperatorFault) {
++        logger.error(httpErrorLog, "adapter.litellm.stream_http_error");
++      } else {
++        logger.warn(httpErrorLog, "adapter.litellm.stream_http_error");
++      }
+       throw new LlmError(
+         `LiteLLM API error: ${response.status} ${response.statusText}`,
+         kind,
+@@ -577,8 +343,10 @@ export class LiteLlmAdapter implements LlmService {
+     const providerCostUsd = getProviderCostFromHeaders(response);
+     const litellmCallId = getLitellmCallIdFromHeaders(response);
+ 
+-    // Create a deferred promise for the final result (matches completion() return type)
+-    type CompletionResult = Awaited<ReturnType<LlmService["completion"]>>;
++    // Create a deferred promise for the final result (matches completionStream's `final`)
++    type CompletionResult = Awaited<
++      Awaited<ReturnType<LlmService["completionStream"]>>["final"]
++    >;
+     const deferred = defer<CompletionResult>();
+ 
+     const stream: AsyncIterable<ChatDeltaEvent> =
+diff --git a/app/src/adapters/server/ai/openai-compatible/openai-compatible-llm.adapter.ts b/app/src/adapters/server/ai/openai-compatible/openai-compatible-llm.adapter.ts
+index 5dac8b57..ec95dfe8 100644
+--- a/app/src/adapters/server/ai/openai-compatible/openai-compatible-llm.adapter.ts
++++ b/app/src/adapters/server/ai/openai-compatible/openai-compatible-llm.adapter.ts
+@@ -42,138 +42,10 @@ export interface OpenAiCompatibleEndpoint {
+ 
+ /** Connect timeout for TTFB (user servers may be slow to start) */
+ const CONNECT_TIMEOUT_MS = 30_000;
+-/** Non-streaming request timeout */
+-const REQUEST_TIMEOUT_MS = 120_000;
+ 
+ export class OpenAiCompatibleLlmAdapter implements LlmService {
+   constructor(private readonly endpoint: OpenAiCompatibleEndpoint) {}
+ 
+-  async completion(
+-    params: Parameters<LlmService["completion"]>[0]
+-  ): ReturnType<LlmService["completion"]> {
+-    if (!params.model) {
+-      throw new Error("OpenAI-compatible completion requires model parameter");
+-    }
+-    const model = params.model;
+-    const temperature = params.temperature ?? DEFAULT_TEMPERATURE;
+-    const maxTokens = params.maxTokens ?? DEFAULT_MAX_TOKENS;
+-
+-    const canonicalMessages = params.messages.map((msg) => ({
+-      role: msg.role,
+-      content: msg.content,
+-    }));
+-    const promptHash = computePromptHash({
+-      model,
+-      messages: canonicalMessages,
+-      temperature,
+-      maxTokens,
+-    });
+-
+-    const messages = params.messages.map((msg) => {
+-      const base: Record<string, unknown> = {
+-        role: msg.role,
+-        content: msg.content,
+-      };
+-      if (msg.toolCalls && msg.toolCalls.length > 0) {
+-        base.tool_calls = msg.toolCalls.map((tc) => ({
+-          id: tc.id,
+-          type: "function",
+-          function: { name: tc.name, arguments: tc.arguments },
+-        }));
+-      }
+-      if (msg.role === "tool" && msg.toolCallId) {
+-        base.tool_call_id = msg.toolCallId;
+-      }
+-      return base;
+-    });
+-
+-    const response = await this.doFetch(
+-      {
+-        model,
+-        messages,
+-        temperature,
+-        max_tokens: maxTokens,
+-        stream: false,
+-      },
+-      REQUEST_TIMEOUT_MS
+-    );
+-
+-    if (!response.ok) {
+-      const kind = classifyLlmErrorFromStatus(response.status);
+-      log.warn(
+-        { status: response.status, kind, model },
+-        "openai-compatible.completion_error"
+-      );
+-      throw new LlmError(
+-        `Endpoint returned ${response.status}`,
+-        kind,
+-        response.status
+-      );
+-    }
+-
+-    const data = (await response.json()) as {
+-      model?: string;
+-      choices?: Array<{
+-        message?: { content?: string };
+-        finish_reason?: string;
+-      }>;
+-      usage?: {
+-        prompt_tokens?: number;
+-        completion_tokens?: number;
+-        total_tokens?: number;
+-      };
+-    };
+-
+-    if (
+-      !data.choices?.[0]?.message?.content &&
+-      typeof data.choices?.[0]?.message?.content !== "string"
+-    ) {
+-      throw new LlmError("Invalid response from endpoint", "unknown");
+-    }
+-
+-    const promptTokens = Number(data.usage?.prompt_tokens) || 0;
+-    const completionTokens = Number(data.usage?.completion_tokens) || 0;
+-    const resolvedModel = data.model ?? model;
+-    const firstChoice = data.choices[0];
+-    const firstMessage = firstChoice?.message?.content;
+-
+-    if (typeof firstMessage !== "string") {
+-      throw new LlmError("Invalid response from endpoint", "unknown");
+-    }
+-
+-    const result: Awaited<ReturnType<LlmService["completion"]>> = {
+-      message: {
+-        role: "assistant",
+-        content: firstMessage,
+-      },
+-      usage: {
+-        promptTokens,
+-        completionTokens,
+-        totalTokens: promptTokens + completionTokens,
+-      },
+-      providerMeta: data as unknown as Record<string, unknown>,
+-      promptHash,
+-      resolvedProvider: "openai-compatible",
+-      resolvedModel,
+-      resolvedDisplayName: humanizeModelId(resolvedModel),
+-    };
+-
+-    if (firstChoice?.finish_reason) {
+-      result.finishReason = firstChoice.finish_reason;
+-    }
+-
+-    log.info(
+-      {
+-        model: resolvedModel,
+-        tokensUsed: promptTokens + completionTokens,
+-        promptHash,
+-      },
+-      "openai-compatible.completion_result"
+-    );
+-
+-    return result;
+-  }
+-
+   async completionStream(
+     params: Parameters<LlmService["completionStream"]>[0]
+   ): ReturnType<LlmService["completionStream"]> {
+diff --git a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+index d4fd0705..9279079e 100644
+--- a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
++++ b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+@@ -42,10 +42,11 @@ export class ViemEvmOnchainClient implements EvmOnchainClient {
+     }
+ 
+     const env = serverEnv();
+-    // On-chain READS need only chain identity + RPC - NOT payment activation. Source the
+-    // chain from cogni_dao.chain_id (getDaoConfig), not getPaymentConfig: a treasury balance
+-    // read must work for any node with a DAO, activated or not. The getPaymentConfig() gate
+-    // threw "Payment rails not activated" for non-activated nodes -> fleet "Treasury --". (op #1843)
++    // On-chain READS (treasury balance, block number, logs) need only the chain
++    // identity + an RPC endpoint - NOT payment activation. Source the chain from the
++    // node's DAO config (cogni_dao.chain_id), not getPaymentConfig: a balance read must
++    // work for any node with a DAO identity, activated or not. The getPaymentConfig() gate
++    // threw "Payment rails not activated" for every non-activated node -> fleet "Treasury --".
+     const dao = getDaoConfig();
+     if (!dao) {
+       throw new Error(
+diff --git a/app/src/app/(app)/chat/view.tsx b/app/src/app/(app)/chat/view.tsx
+index a3b7bdfa..badc2b11 100644
+--- a/app/src/app/(app)/chat/view.tsx
++++ b/app/src/app/(app)/chat/view.tsx
+@@ -55,13 +55,13 @@ const ChatWelcomeWithHint = () => (
+   <div className="mx-auto flex h-full w-full max-w-[var(--thread-max-width)] flex-col items-center justify-center">
+     <div className="flex flex-col justify-center gap-1 px-8">
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 duration-300 ease-out sm:text-2xl">
+-        Map the attack surface
++        Clone this living mind
+       </div>
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 delay-100 duration-300 ease-out sm:text-2xl">
+-        Think like the adversary
++        Teach it what your people need
+       </div>
+       <div className="fade-in slide-in-from-bottom-2 animate-in text-lg text-muted-foreground/65 delay-200 duration-300 ease-out sm:text-2xl">
+-        Make the defenders win.
++        Intelligence, shared.
+       </div>
+     </div>
+   </div>
+diff --git a/app/src/app/.well-known/agent.json/route.ts b/app/src/app/.well-known/agent.json/route.ts
+index 2078a640..e49baedf 100644
+--- a/app/src/app/.well-known/agent.json/route.ts
++++ b/app/src/app/.well-known/agent.json/route.ts
+@@ -19,6 +19,13 @@
+  */
+ 
+ import { NextResponse } from "next/server";
++import {
++	getNodeBrandColor,
++	getNodeHook,
++	getNodeMission,
++	getNodeName,
++	getNodeThumbnail,
++} from "@/shared/config/repoSpec.server";
+ import { serverEnv } from "@/shared/env";
+ 
+ export const runtime = "nodejs";
+@@ -48,6 +55,15 @@ export async function GET(request: Request) {
+ 		name: "Cogni Node API",
+ 		version: "v1",
+ 		buildSha: env.APP_BUILD_SHA,
++		// IDENTITY_IS_REPO_SPEC_PROJECTION: the node's display identity, projected from its own repo-spec
++		// `intent` (never hardcoded). The operator reads THIS to render gallery cards — no operator-side
++		// per-node literals. A node customizes itself by editing repo-spec, not operator code.
++		identity: {
++			name: getNodeName(),
++			hook: getNodeHook(),
++			mission: getNodeMission(),
++			brand: { thumbnail: getNodeThumbnail(), color: getNodeBrandColor() },
++		},
+ 		registrationUrl: `${origin}/api/v1/agent/register`,
+ 		auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
+ 		endpoints: {
+diff --git a/app/src/app/_facades/ai/execution-error-mapper.ts b/app/src/app/_facades/ai/execution-error-mapper.ts
+index a0fea199..6dc106f4 100644
+--- a/app/src/app/_facades/ai/execution-error-mapper.ts
++++ b/app/src/app/_facades/ai/execution-error-mapper.ts
+@@ -27,6 +27,9 @@ const HTTP_STATUS_MAP: Record<AiExecutionErrorCode, number> = {
+   not_found: 404,
+   invalid_request: 400,
+   internal: 500,
++  // Operator-fault (provider down / unfunded) → 503, never 500. Client maps 503
++  // to a "temporarily unavailable" retry message, never "add credits" (bug.5056).
++  provider_unavailable: 503,
+ };
+ 
+ const OPENAI_ERROR_MAP: Record<
+@@ -69,6 +72,12 @@ const OPENAI_ERROR_MAP: Record<
+     message: "The server encountered an internal error. Please retry.",
+     type: "server_error",
+   },
++  provider_unavailable: {
++    status: 503,
++    message:
++      "The upstream AI provider is temporarily unavailable. Please retry shortly.",
++    type: "service_unavailable",
++  },
+ };
+ 
+ const OPENAI_FALLBACK = {
+diff --git a/app/src/app/api/v1/cognition/_bundle.ts b/app/src/app/api/v1/cognition/_bundle.ts
+index 01e8d4cf..56892154 100644
+--- a/app/src/app/api/v1/cognition/_bundle.ts
++++ b/app/src/app/api/v1/cognition/_bundle.ts
+@@ -31,14 +31,11 @@ import type {
+  * domain expertise) is delivered live from the knowledge hub on top of this.
+  */
+ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
+-	"Adopt exactly ONE production work item and ONE node per session (single-node-scope is a CI gate). Claim + heartbeat + link PR via /api/v1/work/items/{id}/{claims,heartbeat,pr,coordination}; coordination.nextAction is authoritative.",
+-	"RECALL the node knowledge hub before designing or researching (RECALL_BEFORE_WRITE) — two planes: merged (/api/v1/knowledge?domain=) AND your own open contribution branch (GET /contributions/{id}/diff).",
+-	"Every code change flows through the operator. Align to existing specs/skills/prior code before writing; refine and simplify in place over adding parallel artifacts.",
+-	"Push to a feature branch and let CI verify — do not run broad local check/build suites. Monitor `gh pr checks` to green.",
+-	"Definition of Done = merged AND validated on candidate-a: flight the PR, exercise the changed surface against the live deployed URL, read your own request back from Loki at the deployed SHA, then post a /validate-candidate scorecard on the PR. The posted scorecard IS the validation signal — not a work-item flag to flip.",
+-	"Clean architecture: strict typing (no `any`), Zod boundaries, hexagonal layering, Pino→Loki observability, idempotent ops. Purge legacy — no backwards-compat shims unless the user asks.",
+-	"Durable learning refines back into the knowledge hub (rare, recall→refine over write-new), never inline comments or docs sprawl.",
+-	"A new knowledge entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands.",
++	"Adopt exactly ONE work item and ONE node per session (single-node-scope is a CI gate); claim + heartbeat + link the PR via /api/v1/work/items/{id}/{claims,heartbeat,pr}; coordination.nextAction is authoritative.",
++	"RECALL the node knowledge hub before designing, researching, or coding — both merged (/api/v1/knowledge?domain=) and your own open contribution branch — and refine in place over creating new.",
++	"Push a feature branch and let CI verify (gh pr checks). The operator is the deploy plane only — flight, logs, secrets — not where code, work items, or knowledge live.",
++	"Definition of Done = validated on candidate-a, not merely merged: flight the PR, exercise the live deployed surface, read your own request back from Loki at the deployed SHA, and post a /validate-candidate scorecard — that posted scorecard is the merge gate.",
++	"Recall this node's <slug>-agent-orientation entry for the operating map — architecture and observability standards, what's safe to run, what can break prod/candidate, and what to recall next — and refine it in the hub as the node changes.",
+ ];
+ 
+ const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
+diff --git a/app/src/app/layout.tsx b/app/src/app/layout.tsx
+index 2909c540..ec3a0d1d 100644
+--- a/app/src/app/layout.tsx
++++ b/app/src/app/layout.tsx
+@@ -34,9 +34,8 @@ const manrope = Manrope({
+ });
+ 
+ export const metadata: Metadata = {
+-  title: "cogni/red - Adversarial Security Intelligence",
+-  description:
+-    "Think like an attacker so defenders win. Red-team recon, threat modeling, and attack-path analysis for blue-team defense.",
++  title: "Cogni",
++  description: "Web3 Gov + Web2 AI",
+ };
+ 
+ // See operator/app/src/app/layout.tsx for rationale — `headers()` in the
+diff --git a/app/src/app/opengraph-image.tsx b/app/src/app/opengraph-image.tsx
+new file mode 100644
+index 00000000..2367d340
+--- /dev/null
++++ b/app/src/app/opengraph-image.tsx
+@@ -0,0 +1,117 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@app/opengraph-image`
++ * Purpose: Generated social + gallery thumbnail rendered from THIS node's
++ *   repo-spec identity (name + hook + brand.color). One image serves both the
++ *   `og:image` link preview and the operator gallery card — always current,
++ *   no committed binaries, no CDN (the node's own Next server renders it).
++ * Scope: Single default export (Next metadata file convention) → /opengraph-image.
++ * Invariants:
++ *   - IDENTITY_IS_REPO_SPEC_PROJECTION: every literal derives from `intent.*`
++ *     via repoSpec.server; the node name/hook/color are never hardcoded here.
++ * Side-effects: reads repo-spec from disk (node runtime).
++ * Links: .cogni/repo-spec.yaml, src/app/.well-known/agent.json/route.ts
++ * @public
++ */
++
++import { ImageResponse } from "next/og";
++import {
++  getNodeBrandColor,
++  getNodeHook,
++  getNodeName,
++} from "@/shared/config/repoSpec.server";
++
++export const runtime = "nodejs";
++// Render at request time, never at build. The image is drawn from repo-spec,
++// which resolves via serverEnv() (full runtime env) — absent during the build
++// prerender. force-dynamic defers execution to the deployed pod, mirroring how
++// the .well-known/agent.json route stays dynamic by reading request headers.
++export const dynamic = "force-dynamic";
++export const size = { width: 1200, height: 630 };
++export const contentType = "image/png";
++export const alt = "Cogni node identity card";
++
++// Monogram tint fallback when a node has not yet declared `intent.brand.color`.
++const FALLBACK_COLOR = "#6366f1";
++
++/** TitleCase a node slug for display (`node-template` → `Node Template`). */
++function titleCase(slug: string): string {
++  return slug
++    .split(/[-_\s]+/)
++    .filter(Boolean)
++    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
++    .join(" ");
++}
++
++export default function OpengraphImage(): ImageResponse {
++  const name = titleCase(getNodeName());
++  const hook = getNodeHook();
++  const color = getNodeBrandColor() ?? FALLBACK_COLOR;
++
++  return new ImageResponse(
++    <div
++      style={{
++        width: "100%",
++        height: "100%",
++        display: "flex",
++        flexDirection: "column",
++        justifyContent: "space-between",
++        background: "#09090b",
++        backgroundImage: `radial-gradient(1000px circle at 100% 0%, ${color}33, transparent 55%)`,
++        borderLeft: `16px solid ${color}`,
++        padding: "84px",
++      }}
++    >
++      <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
++        <div
++          style={{
++            width: "30px",
++            height: "30px",
++            borderRadius: "9999px",
++            background: color,
++          }}
++        />
++        <div
++          style={{
++            color: "#a1a1aa",
++            fontSize: "30px",
++            fontWeight: 600,
++            letterSpacing: "8px",
++          }}
++        >
++          COGNI
++        </div>
++      </div>
++
++      <div style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
++        <div
++          style={{
++            color: "#fafafa",
++            fontSize: "100px",
++            fontWeight: 700,
++            lineHeight: 1.04,
++          }}
++        >
++          {name}
++        </div>
++        {hook ? (
++          <div style={{ color, fontSize: "46px", fontWeight: 500 }}>{hook}</div>
++        ) : null}
++      </div>
++
++      <div
++        style={{
++          display: "flex",
++          justifyContent: "flex-start",
++          color: "#71717a",
++          fontSize: "28px",
++        }}
++      >
++        <span>cognidao.org</span>
++      </div>
++    </div>,
++    size
++  );
++}
+diff --git a/app/src/components/kit/navigation/MobileNav.tsx b/app/src/components/kit/navigation/MobileNav.tsx
+index f0dea5c3..958a75a3 100644
+--- a/app/src/components/kit/navigation/MobileNav.tsx
++++ b/app/src/components/kit/navigation/MobileNav.tsx
+@@ -57,7 +57,7 @@ export function MobileNav({ className }: MobileNavProps): ReactElement {
+           <NavigationLink href="/gov">Gov</NavigationLink>
+           <NavigationLink href="/credits">Credits</NavigationLink>
+           <a
+-            href="https://github.com/cogni-dao/red"
++            href="https://github.com/cogni-DAO/cogni-template"
+             target="_blank"
+             rel="noopener noreferrer"
+             className="flex items-center gap-2 font-medium text-muted-foreground text-sm transition-colors hover:text-foreground"
+diff --git a/app/src/features/ai/AGENTS.md b/app/src/features/ai/AGENTS.md
+index a565eabc..f42377ce 100644
+--- a/app/src/features/ai/AGENTS.md
++++ b/app/src/features/ai/AGENTS.md
+@@ -75,7 +75,8 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides
+ 
+ ## Ports
+ 
+-- **Uses ports:** AccountService (recordChargeReceipt), LlmService (completion, completionStream), AiTelemetryPort (recordInvocation), LangfusePort (createTrace, recordGeneration), GraphExecutorPort (runGraph — used by internal execution route, not facade)
++- **Uses ports:** AccountService (recordChargeReceipt), AiTelemetryPort (recordInvocation), LangfusePort (createTrace, recordGeneration), GraphExecutorPort (runGraph — used by internal execution route, not facade)
++  - `LlmService` (completionStream) is **executor-internal only** — consumed solely by `services/completion.ts` (`executeStream`) and the in-proc completion adapter. It carries NO preflight credit gate and NO usage-receipt commit on its own (those live in the GraphExecutorPort decorator stack). Features/routes MUST NOT inject or call it directly — that silently bypasses fair billing (bug.5042). Enforced by `no-direct-completion-executestream.stack.test.ts`. Build AI features via the graph executor / `completionStream` facade. See [agent-development.md](../../../../docs/guides/agent-development.md#billing-safe-ai-the-only-way-to-call-an-llm).
+ - **Implements ports:** none
+ - **Contracts:** chat.completions.v1, ai.chat.v1, ai.threads.v1, ai.models.v1, ai.activity.v1
+ 
+@@ -89,7 +90,7 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides
+   - Fetch and cache available models list (server-side cache with SWR)
+   - Validate selected models against server-side allowlist
+   - Transform between wire formats and domain DTOs
+-  - Delegate to LlmCaller port for actual LLM calls
++  - Run all billable LLM work through the graph executor (preflight credit gate + post-call usage commit); `executeStream` is the executor-internal seam over `LlmService.completionStream`, never a public entrypoint
+   - Record charge receipts via AccountService.recordChargeReceipt (per ACTIVITY_METRICS.md)
+   - Record AI invocation telemetry via AiTelemetryPort (per AI_SETUP_SPEC.md)
+   - Create Langfuse traces for observability (optional, env-gated)
+diff --git a/app/src/features/ai/components/ChatComposerExtras.tsx b/app/src/features/ai/components/ChatComposerExtras.tsx
+index 8edfbcc3..eb76d448 100644
+--- a/app/src/features/ai/components/ChatComposerExtras.tsx
++++ b/app/src/features/ai/components/ChatComposerExtras.tsx
+@@ -37,19 +37,14 @@ import {
+  */
+ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
+   {
+-    graphId: "langgraph:brain" satisfies GraphId,
+-    name: "Red Brain",
+-    description: "Code-aware attack-path and threat-modeling assistant",
+-  },
+-  {
+-    graphId: "langgraph:research" satisfies GraphId,
+-    name: "Threat Intel",
+-    description: "Deep research for adversary techniques and controls",
++    graphId: "langgraph:poly-brain" satisfies GraphId,
++    name: "Poly Brain",
++    description: "Prediction market analyst with live market data",
+   },
+   {
+-    graphId: "langgraph:browser" satisfies GraphId,
+-    name: "Recon Browser",
+-    description: "Browser agent for public-surface inspection",
++    graphId: "langgraph:brain" satisfies GraphId,
++    name: "Brain",
++    description: "Code-aware assistant with repo access",
+   },
+   {
+     graphId: "langgraph:poet" satisfies GraphId,
+@@ -61,16 +56,26 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
+     name: "Ponderer",
+     description: "Philosophical thinker",
+   },
++  {
++    graphId: "langgraph:research" satisfies GraphId,
++    name: "Research",
++    description: "Deep research with web search",
++  },
++  {
++    graphId: "langgraph:browser" satisfies GraphId,
++    name: "Browser",
++    description: "Web browsing agent with Playwright MCP",
++  },
+   {
+     graphId: "langgraph:frontend-tester" satisfies GraphId,
+-    name: "UI Probe",
+-    description: "QA agent that tests web UI behavior with Playwright",
++    name: "Frontend Tester",
++    description: "QA agent — tests web UIs via Playwright",
+   },
+   {
+     graphId: "langgraph:operating-review" satisfies GraphId,
+-    name: "Risk Review",
++    name: "Operating Review",
+     description:
+-      "Periodic review that triages backlog risks into structured briefs",
++      "Periodic review — triages backlog, flags risks, produces structured briefs",
+   },
+ ];
+ 
+diff --git a/app/src/features/layout/components/AppFooter.tsx b/app/src/features/layout/components/AppFooter.tsx
+index 50b30b76..1e2c7a50 100644
+--- a/app/src/features/layout/components/AppFooter.tsx
++++ b/app/src/features/layout/components/AppFooter.tsx
+@@ -11,7 +11,7 @@
+  * @public
+  */
+ 
+-import { Crosshair } from "lucide-react";
++import Image from "next/image";
+ import Link from "next/link";
+ import type { ReactElement } from "react";
+ 
+@@ -26,13 +26,16 @@ export function AppFooter(): ReactElement {
+           {/* Brand column */}
+           <div className="col-span-2 md:col-span-1">
+             <Link href="/" className="flex items-center gap-2">
+-              <Crosshair className="size-5 text-primary" aria-hidden="true" />
+-              <span className="font-bold">
+-                cogni<span className="text-gradient-accent">/red</span>
+-              </span>
++              <Image
++                src="/TransparentBrainOnly.png"
++                alt="Cogni"
++                width={24}
++                height={24}
++              />
++              <span className="font-bold text-gradient-accent">Cogni</span>
+             </Link>
+             <p className="mt-3 text-muted-foreground text-sm">
+-              Adversarial security intelligence for defenders.
++              Web3 Gov + Web2 AI
+             </p>
+           </div>
+ 
+diff --git a/app/src/features/layout/components/AppHeader.tsx b/app/src/features/layout/components/AppHeader.tsx
+index 56137682..282afc5d 100644
+--- a/app/src/features/layout/components/AppHeader.tsx
++++ b/app/src/features/layout/components/AppHeader.tsx
+@@ -14,7 +14,8 @@
+ 
+ "use client";
+ 
+-import { Crosshair, Github } from "lucide-react";
++import { Github } from "lucide-react";
++import Image from "next/image";
+ import Link from "next/link";
+ import type { ReactElement } from "react";
+ 
+@@ -44,12 +45,15 @@ export function AppHeader(): ReactElement {
+               aria-current="page"
+               className="flex min-w-0 items-center gap-2 pl-4 sm:pl-0"
+             >
+-              <Crosshair
+-                className="size-6 shrink-0 text-primary"
+-                aria-hidden="true"
++              <Image
++                src="/TransparentBrainOnly.png"
++                alt="Cogni"
++                width={24}
++                height={24}
++                className="shrink-0"
+               />
+-              <span className="hidden truncate font-bold text-xl md:inline">
+-                cogni<span className="text-gradient-accent">/red</span>
++              <span className="hidden truncate font-bold text-gradient-accent text-xl md:inline">
++                Cogni
+               </span>
+             </Link>
+ 
+diff --git a/app/src/features/layout/components/AppSidebar.tsx b/app/src/features/layout/components/AppSidebar.tsx
+index 5bee178d..56a96623 100644
+--- a/app/src/features/layout/components/AppSidebar.tsx
++++ b/app/src/features/layout/components/AppSidebar.tsx
+@@ -17,12 +17,12 @@ import {
+   BookOpen,
+   Briefcase,
+   CreditCard,
+-  Crosshair,
+   Github,
+   LayoutDashboard,
+   Shield,
+   Vote,
+ } from "lucide-react";
++import Image from "next/image";
+ import Link from "next/link";
+ import { usePathname } from "next/navigation";
+ import { useSession } from "next-auth/react";
+@@ -53,7 +53,7 @@ const NAV_ITEMS = [
+ 
+ const EXTERNAL_LINKS = [
+   {
+-    href: "https://github.com/cogni-dao/red",
++    href: "https://github.com/cogni-DAO/cogni-template",
+     label: "GitHub",
+     icon: Github,
+   },
+@@ -90,16 +90,18 @@ export function AppSidebar(): ReactElement {
+       <SidebarHeader className="h-16 shrink-0 justify-center">
+         <SidebarMenu>
+           <SidebarMenuItem>
+-            <SidebarMenuButton size="lg" asChild tooltip="cogni/red">
++            <SidebarMenuButton size="lg" asChild tooltip="Cogni">
+               <Link href="/chat">
+                 <div className="flex aspect-square size-8 items-center justify-center">
+-                  <Crosshair
+-                    className="size-6 text-primary"
+-                    aria-hidden="true"
++                  <Image
++                    src="/TransparentBrainOnly.png"
++                    alt="Cogni"
++                    width={24}
++                    height={24}
+                   />
+                 </div>
+-                <span className="truncate font-bold">
+-                  cogni<span className="text-gradient-accent">/red</span>
++                <span className="truncate font-bold text-gradient-accent">
++                  Cogni
+                 </span>
+               </Link>
+             </SidebarMenuButton>
+diff --git a/app/src/features/layout/components/footer-items.tsx b/app/src/features/layout/components/footer-items.tsx
+index a91e420d..5d0cfaf7 100644
+--- a/app/src/features/layout/components/footer-items.tsx
++++ b/app/src/features/layout/components/footer-items.tsx
+@@ -49,7 +49,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+     links: [
+       {
+         label: "Documentation",
+-        href: "https://github.com/cogni-dao/red",
++        href: "https://github.com/cogni-DAO/cogni-template",
+         external: true,
+       },
+     ],
+@@ -59,7 +59,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+     links: [
+       {
+         label: "GitHub",
+-        href: "https://github.com/cogni-dao/red",
++        href: "https://github.com/cogni-DAO/cogni-template",
+         external: true,
+       },
+       {
+@@ -74,7 +74,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
+ export const SOCIAL_LINKS: SocialLink[] = [
+   {
+     label: "GitHub",
+-    href: "https://github.com/cogni-dao/red",
++    href: "https://github.com/cogni-DAO/cogni-template",
+     icon: GitHubIcon,
+   },
+   {
+diff --git a/app/src/node-config.ts b/app/src/node-config.ts
+index faf35b07..40d9dfd0 100644
+--- a/app/src/node-config.ts
++++ b/app/src/node-config.ts
+@@ -9,8 +9,8 @@ import {
+ import { DiscordIcon } from "@/components";
+ 
+ export const nodeConfig: NodeAppConfig = {
+-  name: "cogni/red",
+-  logo: { src: "/red-node-mark.svg", alt: "cogni/red", href: "/chat" },
++  name: "Cogni",
++  logo: { src: "/TransparentBrainOnly.png", alt: "Cogni", href: "/chat" },
+   navItems: [
+     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+     { href: "/work", label: "Work", icon: Briefcase },
+@@ -19,7 +19,7 @@ export const nodeConfig: NodeAppConfig = {
+   ],
+   externalLinks: [
+     {
+-      href: "https://github.com/cogni-dao/red",
++      href: "https://github.com/cogni-DAO/cogni-template",
+       label: "GitHub",
+       icon: Github,
+     },
+diff --git a/app/src/ports/llm.port.ts b/app/src/ports/llm.port.ts
+index 2e7c4691..666054d8 100644
+--- a/app/src/ports/llm.port.ts
++++ b/app/src/ports/llm.port.ts
+@@ -95,10 +95,11 @@ export type LlmToolChoice =
+   | { readonly type: "function"; readonly function: { readonly name: string } };
+ 
+ /**
+- * Caller info for direct LLM calls (no graph execution).
++ * Caller info for a single-completion LLM call (no graph orchestration).
++ * This is the executor-internal seam's caller struct — features never construct it
++ * directly (see the LlmService doc below). Multi-step graph runs use GraphLlmCaller.
+  * Per AI_SETUP_SPEC.md P1 invariant GRAPH_CALLER_TYPE_REQUIRED:
+  * DO NOT add graphRunId as optional field here.
+- * Use GraphLlmCaller for graph executions.
+  */
+ export interface LlmCaller {
+   billingAccountId: string;
+@@ -217,17 +218,26 @@ export interface LlmCompletionResult {
+   resolvedDisplayName?: string;
+ }
+ 
++/**
++ * LLM transport port. EXECUTOR-INTERNAL ONLY.
++ *
++ * BILLABLE_AI_THROUGH_EXECUTOR (graph-execution-spec): this port emits no preflight
++ * credit check and no usage-receipt commit on its own — those live in the
++ * GraphExecutorPort decorator stack (PreflightCreditCheckDecorator + UsageCommitDecorator).
++ * Calling it directly from a feature/route silently bypasses the fair-billing gate
++ * (see bug.5042 — beacon's Research/Generate panels did exactly this).
++ *
++ * The ONLY sanctioned LLM entrypoint for node features is the graph executor —
++ * use the `completionStream` facade (`@/app/_facades/ai/completion.server`) or
++ * `GraphExecutorPort.runGraph`. Direct consumers of this port are restricted to
++ * `features/ai/services/completion.ts` and the in-proc completion adapter, enforced
++ * by `tests/stack/ai/no-direct-completion-executestream.stack.test.ts`.
++ *
++ * Note: there is intentionally no non-streaming `completion()` method — a single
++ * streaming seam keeps billing/telemetry centralized. Non-streaming callers drain
++ * the stream and await `final`.
++ */
+ export interface LlmService {
+-  completion(params: {
+-    messages: Message[];
+-    model?: string;
+-    temperature?: number;
+-    maxTokens?: number;
+-    caller: LlmCaller;
+-    /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
+-    spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
+-  }): Promise<LlmCompletionResult>;
+-
+   completionStream(params: CompletionStreamParams): Promise<{
+     stream: AsyncIterable<ChatDeltaEvent>;
+     final: Promise<LlmCompletionResult>;
+diff --git a/app/src/shared/config/repoSpec.server.ts b/app/src/shared/config/repoSpec.server.ts
+index 21a49d8d..b0add46d 100644
+--- a/app/src/shared/config/repoSpec.server.ts
++++ b/app/src/shared/config/repoSpec.server.ts
+@@ -20,8 +20,11 @@ import {
+   extractDaoTreasuryAddress,
+   extractGovernanceConfig,
+   extractLedgerApprovers,
++  extractNodeBrandColor,
++  extractNodeHook,
+   extractNodeMission,
+   extractNodeName,
++  extractNodeThumbnail,
+   extractOperatorWalletConfig,
+   extractPaymentConfig,
+   type GovernanceConfig,
+@@ -111,6 +114,21 @@ export function getNodeMission(): string | null {
+   return extractNodeMission(loadRepoSpec());
+ }
+ 
++/** Punchy ~5-word gallery/heading hook from repo-spec `intent.hook`, or null. */
++export function getNodeHook(): string | null {
++  return extractNodeHook(loadRepoSpec());
++}
++
++/** Self-hosted brand thumbnail URL from repo-spec `intent.brand.thumbnail`, or null. */
++export function getNodeThumbnail(): string | null {
++  return extractNodeThumbnail(loadRepoSpec());
++}
++
++/** Monogram-tint brand color from repo-spec `intent.brand.color`, or null. */
++export function getNodeBrandColor(): string | null {
++  return extractNodeBrandColor(loadRepoSpec());
++}
++
+ let cachedScopeId: string | null = null;
+ 
+ /**
+diff --git a/app/src/shared/observability/events/AGENTS.md b/app/src/shared/observability/events/AGENTS.md
+index 75cfb901..bd4fc71b 100644
+--- a/app/src/shared/observability/events/AGENTS.md
++++ b/app/src/shared/observability/events/AGENTS.md
+@@ -14,7 +14,7 @@ Event name registry as single source of truth. Prevents ad-hoc event strings and
+ ## Pointers
+ 
+ - [Parent AGENTS.md](../AGENTS.md)
+-- [Observability](../../../../../../docs/spec/observability.md)
++- [Observability finish-pass command](../../../../../../.claude/commands/observability.md)
+ 
+ ## Boundaries
+ 
+diff --git a/app/src/styles/tailwind.css b/app/src/styles/tailwind.css
+index 707d1d5f..96200aac 100644
+--- a/app/src/styles/tailwind.css
++++ b/app/src/styles/tailwind.css
+@@ -127,7 +127,7 @@
+     --card-foreground: 222.2 84% 4.9%;
+     --popover: 210 40% 96.1%;
+     --popover-foreground: 215.4 16.3% 20%;
+-    --primary: 0 74% 48%;
++    --primary: 222.2 47.4% 11.2%;
+     --primary-foreground: 210 40% 98%;
+     --secondary: 210 40% 96.1%;
+     --secondary-foreground: 222.2 47.4% 11.2%;
+@@ -139,7 +139,7 @@
+     --destructive-foreground: var(--color-red-800);
+     --border: 214.3 31.8% 91.4%;
+     --input: 214.3 31.8% 91.4%;
+-    --ring: 0 74% 48%;
++    --ring: 222.2 84% 4.9%;
+     --chart-1: 220 70% 50%;
+     --chart-2: 160 60% 45%;
+     --chart-3: 30 80% 55%;
+@@ -154,10 +154,10 @@
+     --syntax-string: 27 87% 67%; /* orange/peach - strings & variables */
+     --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
+ 
+-    /* Accent gradient stops (aligned with brand hue 0 - red) */
+-    --accent-from: 0 85% 52%;
+-    --accent-to: 0 90% 65%;
+-    --accent-glow: 0 90% 58%;
++    /* Accent gradient stops (aligned with brand hue 217) */
++    --accent-from: 217 85% 50%;
++    --accent-to: 217 100% 70%;
++    --accent-glow: 217 95% 60%;
+ 
+     /* Status colors */
+     --color-danger: 0 84.2% 60.2%;
+@@ -167,12 +167,12 @@
+     /* Sidebar */
+     --sidebar: 0 0% 98%;
+     --sidebar-foreground: 222.2 84% 4.9%;
+-    --sidebar-primary: 0 74% 48%;
++    --sidebar-primary: 222.2 47.4% 11.2%;
+     --sidebar-primary-foreground: 210 40% 98%;
+     --sidebar-accent: 210 40% 96.1%;
+     --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+     --sidebar-border: 214.3 31.8% 91.4%;
+-    --sidebar-ring: 0 74% 48%;
++    --sidebar-ring: 222.2 84% 4.9%;
+ 
+     --radius: 0.5rem;
+ 
+@@ -200,7 +200,7 @@
+     --card-foreground: 210 40% 98%;
+     --popover: 217.2 32.6% 9%;
+     --popover-foreground: 215 20.2% 76.1%;
+-    --primary: 0 74% 48%;
++    --primary: 217 71% 40%;
+     --primary-foreground: 0 0% 100%;
+     --secondary: 217.2 32.6% 17.5%;
+     --secondary-foreground: 210 40% 98%;
+@@ -212,7 +212,7 @@
+     --destructive-foreground: var(--color-red-600);
+     --border: 217.2 32.6% 17.5%;
+     --input: 217.2 32.6% 17.5%;
+-    --ring: 0 74% 48%;
++    --ring: 217 71% 40%;
+     --chart-1: 220 70% 50%;
+     --chart-2: 160 60% 45%;
+     --chart-3: 30 80% 55%;
+@@ -227,20 +227,20 @@
+     --syntax-string: 20 90% 80%; /* peach/orange - strings & variables */
+     --syntax-keyword: 220 100% 65%; /* blue - keywords */
+ 
+-    /* Accent gradient stops (aligned with brand hue 0 - red, darker for dark mode) */
+-    --accent-from: 0 82% 50%;
+-    --accent-to: 0 92% 62%;
+-    --accent-glow: 0 88% 56%;
++    /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
++    --accent-from: 217 80% 45%;
++    --accent-to: 217 100% 60%;
++    --accent-glow: 217 90% 52%;
+ 
+     /* Sidebar */
+     --sidebar: 0 0% 3%;
+     --sidebar-foreground: 210 40% 98%;
+-    --sidebar-primary: 0 74% 48%;
++    --sidebar-primary: 217 71% 40%;
+     --sidebar-primary-foreground: 0 0% 100%;
+     --sidebar-accent: 217.2 32.6% 17.5%;
+     --sidebar-accent-foreground: 210 40% 98%;
+     --sidebar-border: 217.2 32.6% 17.5%;
+-    --sidebar-ring: 0 74% 48%;
++    --sidebar-ring: 217 71% 40%;
+     --success: var(--color-emerald-500);
+     --success-foreground: var(--color-emerald-600);
+     --info: var(--color-violet-500);
+diff --git a/app/tests/_fakes/ai/fake-llm.service.ts b/app/tests/_fakes/ai/fake-llm.service.ts
+index dfd3568a..7eb01d8a 100644
+--- a/app/tests/_fakes/ai/fake-llm.service.ts
++++ b/app/tests/_fakes/ai/fake-llm.service.ts
+@@ -13,7 +13,7 @@
+  */
+ 
+ import type { Message } from "@cogni/node-core";
+-import type { LlmCaller, LlmCompletionResult, LlmService } from "@/ports";
++import type { LlmCaller, LlmService } from "@/ports";
+ 
+ export interface FakeLlmOptions {
+   shouldThrow?: boolean;
+@@ -48,57 +48,6 @@ export class FakeLlmService implements LlmService {
+     };
+   }
+ 
+-  async completion(params: {
+-    messages: Message[];
+-    model?: string;
+-    temperature?: number;
+-    maxTokens?: number;
+-    caller: LlmCaller;
+-  }): Promise<LlmCompletionResult> {
+-    // Log the call for assertions
+-    this.callLog.push({ ...params });
+-
+-    // Simulate delay if configured
+-    if (this.options.delay) {
+-      await new Promise((resolve) => setTimeout(resolve, this.options.delay));
+-    }
+-
+-    // Throw error if configured
+-    if (this.options.shouldThrow) {
+-      throw new Error(this.options.errorMessage ?? "Mock LLM error");
+-    }
+-
+-    // Return mock response with all fields per LlmCompletionResult
+-    const response: LlmCompletionResult = {
+-      message: {
+-        role: "assistant" as const,
+-        content: this.options.responseContent ?? "Default mock response",
+-        timestamp: new Date().toISOString(),
+-      },
+-      providerMeta: {
+-        model: params.model ?? "mock-model",
+-        provider: "fake",
+-        requestId: "fake-request-id",
+-      },
+-      providerCostUsd: 0.0001, // Small fixed cost for billing tests
+-      // New fields per AI_SETUP_SPEC.md
+-      litellmCallId: "fake-litellm-call-id",
+-      promptHash: this.options.promptHash ?? "fake-prompt-hash-sha256",
+-      resolvedProvider: "fake",
+-      resolvedModel: params.model ?? "mock-model",
+-    };
+-
+-    if (this.options.finishReason) {
+-      response.finishReason = this.options.finishReason;
+-    }
+-
+-    if (this.options.usage) {
+-      response.usage = this.options.usage;
+-    }
+-
+-    return response;
+-  }
+-
+   async completionStream(
+     params: Parameters<LlmService["completionStream"]>[0]
+   ): ReturnType<LlmService["completionStream"]> {
+diff --git a/app/tests/external/ai/openai-compatible-llm.adapter.external.test.ts b/app/tests/external/ai/openai-compatible-llm.adapter.external.test.ts
+index 1c4c2d3b..c058cdef 100644
+--- a/app/tests/external/ai/openai-compatible-llm.adapter.external.test.ts
++++ b/app/tests/external/ai/openai-compatible-llm.adapter.external.test.ts
+@@ -75,21 +75,6 @@ describe.skipIf(!ollamaAvailable)(
+       modelId = firstModel.id;
+     });
+ 
+-    it("completion() returns valid LlmCompletionResult", async () => {
+-      const adapter = new OpenAiCompatibleLlmAdapter({ baseUrl: OLLAMA_URL });
+-      const result = await adapter.completion({
+-        messages: [{ role: "user", content: "Say hello." }],
+-        model: modelId,
+-        caller,
+-      });
+-
+-      expect(result.message.role).toBe("assistant");
+-      expect(result.message.content.length).toBeGreaterThan(0);
+-      expect(result.usage.promptTokens).toBeGreaterThan(0);
+-      expect(result.resolvedProvider).toBe("openai-compatible");
+-      expect(result.resolvedModel).toBeTruthy();
+-    }, 60_000);
+-
+     it("completionStream() yields text_delta events and resolves final", async () => {
+       const adapter = new OpenAiCompatibleLlmAdapter({ baseUrl: OLLAMA_URL });
+       const { stream, final } = await adapter.completionStream({
+@@ -116,6 +101,8 @@ describe.skipIf(!ollamaAvailable)(
+       // Usage may be 0 if server doesn't support stream_options.include_usage
+       expect(finalResult.usage).toBeDefined();
+       expect(finalResult.finishReason).toBeTruthy();
++      expect(finalResult.resolvedProvider).toBe("openai-compatible");
++      expect(finalResult.resolvedModel).toBeTruthy();
+     }, 60_000);
+   }
+ );
+diff --git a/app/tests/stack/ai/no-direct-completion-executestream.stack.test.ts b/app/tests/stack/ai/no-direct-completion-executestream.stack.test.ts
+index ccff83f4..94edb096 100644
+--- a/app/tests/stack/ai/no-direct-completion-executestream.stack.test.ts
++++ b/app/tests/stack/ai/no-direct-completion-executestream.stack.test.ts
+@@ -4,13 +4,18 @@
+ /**
+  * Module: `@tests/stack/ai/no-direct-completion-executestream.stack`
+  * Purpose: Verify BILLABLE_AI_THROUGH_EXECUTOR invariant via static analysis.
+- * Scope: Ensures executeStream() is only called from allowlisted adapter/definition files. Does not test runtime behavior.
++ * Scope: Ensures the raw LlmService transport seam (executeStream + LlmService.completionStream)
++ *   is only consumed from allowlisted executor-internal files, and that the removed
++ *   non-streaming LlmService.completion() is never reintroduced. Does not test runtime behavior.
+  * Invariants:
+- *   - BILLABLE_AI_THROUGH_EXECUTOR: All billable AI execution must flow through AiRuntimeService → GraphExecutorPort
+- *   - Direct completion.executeStream() calls outside executor internals bypass billing/telemetry pipeline
++ *   - BILLABLE_AI_THROUGH_EXECUTOR: All billable AI execution must flow through the graph executor
++ *     (completionStream facade → GraphRunWorkflow → GraphExecutorPort), never the raw LlmService port.
++ *   - Direct LlmService consumption (executeStream / completionStream / completion) outside executor
++ *     internals bypasses the PreflightCreditCheckDecorator + UsageCommitDecorator stack → silent
++ *     post-bill with no credit gate (bug.5042 — beacon's Research/Generate panels did exactly this).
+  * Side-effects: IO (grep subprocess)
+- * Notes: Complements ONE_LEDGER_WRITER. Catches call sites that would silently skip billing.
+- * Links: GRAPH_EXECUTION.md, inproc-completion-unit.adapter.ts, completion.ts
++ * Notes: Complements ONE_LEDGER_WRITER. Catches call sites that would silently skip the billing gate.
++ * Links: graph-execution-spec, docs/guides/agent-development.md, inproc-completion-unit.adapter.ts, completion.ts
+  * @public
+  */
+ 
+@@ -18,53 +23,112 @@ import { execSync } from "node:child_process";
+ import { describe, expect, it } from "vitest";
+ 
+ /**
+- * Allowlisted paths that may call executeStream().
+- * Update this list explicitly when adding new adapters/runtimes.
++ * Allowlisted paths that may consume the raw LlmService transport (executeStream /
++ * LlmService.completionStream). These are the executor-internal seam only.
++ * Update this list explicitly when adding a new executor-internal adapter/runtime —
++ * and only if the new path is itself wrapped by the GraphExecutorPort billing decorators.
+  */
+ const ALLOWLIST = [
+-  // Definition of executeStream itself
++  // Definition of executeStream itself (wraps LlmService.completionStream)
+   "src/features/ai/services/completion.ts",
+-  // InProcCompletionUnitAdapter wraps executeStream for completion units
++  // InProcCompletionUnitAdapter wraps the completion stream for completion units
+   "src/adapters/server/ai/inproc-completion-unit.adapter.ts",
+ ];
+ 
++/** Filter raw grep output down to real call sites outside the allowlist. */
++function callSitesOutsideAllowlist(grepOutput: string): string[] {
++  return (
++    grepOutput
++      .split("\n")
++      .filter(Boolean)
++      .filter((line) => !ALLOWLIST.some((allowed) => line.includes(allowed)))
++      // Filter out type-only references (import type, interface, type alias, signatures)
++      .filter((line) => !line.includes("import type"))
++      .filter((line) => !line.includes(": ExecuteStream"))
++      .filter((line) => !line.includes("ExecuteStreamParams"))
++  );
++}
++
+ describe("BILLABLE_AI_THROUGH_EXECUTOR Invariant", () => {
+   it("executeStream() only called from allowlisted executor/adapter files", () => {
+-    // Search for actual method calls (not type definitions or docs)
+-    // Scope: src/ only (exclude tests/)
+     const result = execSync(
+       "grep -rn '\\.executeStream(' src/ --include='*.ts' || true",
+       { encoding: "utf-8", cwd: process.cwd() }
+     );
+ 
+-    const callSites = result
+-      .split("\n")
+-      .filter(Boolean)
+-      // Filter out allowlisted paths
+-      .filter((line) => !ALLOWLIST.some((allowed) => line.includes(allowed)))
+-      // Filter out type-only references (import type, interface, type alias)
+-      .filter((line) => !line.includes("import type"))
+-      .filter((line) => !line.includes(": ExecuteStream"))
+-      .filter((line) => !line.includes("ExecuteStreamParams"));
++    const callSites = callSitesOutsideAllowlist(result);
+ 
+-    // If any call sites remain, they violate BILLABLE_AI_THROUGH_EXECUTOR
+     if (callSites.length > 0) {
+       console.error(
+         "BILLABLE_AI_THROUGH_EXECUTOR violation! executeStream() called from non-allowlisted files:",
+         callSites
+       );
+       console.error(
+-        "\nAll billable AI execution must flow through AiRuntimeService → GraphExecutorPort."
++        "\nAll billable AI execution must flow through the graph executor (completionStream facade)."
++      );
++      console.error(
++        "If this is a new executor-internal adapter/runtime, add it to the ALLOWLIST in this test.\n"
++      );
++    }
++
++    expect(callSites).toEqual([]);
++  });
++
++  it("LlmService.completionStream() only called from allowlisted executor/adapter files", () => {
++    // The raw transport seam. A feature/route calling this directly bypasses the
++    // preflight credit gate (bug.5042). `.completionStream(` (leading dot) matches
++    // call sites; method definitions are `async completionStream(` (no leading dot).
++    const result = execSync(
++      "grep -rn '\\.completionStream(' src/ --include='*.ts' || true",
++      { encoding: "utf-8", cwd: process.cwd() }
++    );
++
++    const callSites = callSitesOutsideAllowlist(result);
++
++    if (callSites.length > 0) {
++      console.error(
++        "BILLABLE_AI_THROUGH_EXECUTOR violation! LlmService.completionStream() called from non-allowlisted files:",
++        callSites
++      );
++      console.error(
++        "\nNode features must call the graph executor (completionStream facade) — not the raw LlmService port."
++      );
++      console.error(
++        "Need platform/system billing instead of end-user billing? That requires human sign-off and STILL"
++      );
++      console.error(
++        "routes through the executor bound to a system billing account. See docs/guides/agent-development.md.\n"
++      );
++    }
++
++    expect(callSites).toEqual([]);
++  });
++
++  it("the non-streaming LlmService.completion() is never reintroduced", () => {
++    // completion() was removed (bug.5042): it post-billed silently with no credit
++    // pre-check. A single streaming seam keeps billing/telemetry centralized.
++    // Any `.completion(` call site is forbidden anywhere in src.
++    const result = execSync(
++      "grep -rn '\\.completion(' src/ --include='*.ts' || true",
++      { encoding: "utf-8", cwd: process.cwd() }
++    );
++
++    const callSites = result.split("\n").filter(Boolean);
++
++    if (callSites.length > 0) {
++      console.error(
++        "Forbidden non-streaming LlmService.completion() reintroduced:",
++        callSites
+       );
+       console.error(
+-        "If this is a new adapter/runtime, add it to the ALLOWLIST in this test.\n"
++        "\nUse the graph executor (completionStream facade) and await `final` for non-streaming results.\n"
+       );
+     }
+ 
+     expect(callSites).toEqual([]);
+   });
+ 
+-  it("executeStream is not re-exported from public facades", () => {
++  it("LlmService transport is not re-exported from public facades", () => {
+     // Verify executeStream is not exposed via app facades (would bypass executor)
+     const facadeExports = execSync(
+       "grep -rn 'executeStream' src/app/_facades/ --include='*.ts' || true",
+diff --git a/app/tests/unit/adapters/server/ai/litellm.adapter.spec.ts b/app/tests/unit/adapters/server/ai/litellm.adapter.spec.ts
+index acdffc3e..ad0422c4 100644
+--- a/app/tests/unit/adapters/server/ai/litellm.adapter.spec.ts
++++ b/app/tests/unit/adapters/server/ai/litellm.adapter.spec.ts
+@@ -25,20 +25,23 @@ vi.mock("@/shared/env", () => ({
+   }),
+ }));
+ 
+-// Capture logger.warn calls for private error diagnostic assertions (bug.0059)
+-const { mockLoggerWarn } = vi.hoisted(() => ({
++// Capture logger.warn / logger.error for private error diagnostic assertions
++// (bug.0059). Per bug.5056, operator-fault HTTP errors (402, 5xx) log at error
++// (they page); benign 4xx stay at warn — assert against the matching channel.
++const { mockLoggerWarn, mockLoggerError } = vi.hoisted(() => ({
+   mockLoggerWarn: vi.fn(),
++  mockLoggerError: vi.fn(),
+ }));
+ vi.mock("@/shared/observability", () => ({
+   makeLogger: () => ({
+     warn: mockLoggerWarn,
+     info: vi.fn(),
+-    error: vi.fn(),
++    error: mockLoggerError,
+     debug: vi.fn(),
+     child: vi.fn().mockReturnValue({
+       warn: mockLoggerWarn,
+       info: vi.fn(),
+-      error: vi.fn(),
++      error: mockLoggerError,
+       debug: vi.fn(),
+     }),
+   }),
+@@ -63,40 +66,61 @@ describe("LiteLlmAdapter", () => {
+     global.fetch = mockFetch;
+   });
+ 
+-  describe("completion method", () => {
++  /**
++   * Build a mock fetch Response that streams SSE chunks via body.getReader().
++   * Models LiteLLM's streaming response shape (used by completionStream()).
++   * Each entry in `chunks` is sent as one reader.read() value; caller supplies
++   * the raw SSE frames (e.g. `data: {...}\n\n`, `data: [DONE]\n\n`).
++   */
++  function makeSseResponse(chunks: string[], headers: Headers = new Headers()) {
++    const reads = chunks.map((c) => ({
++      done: false as const,
++      value: new TextEncoder().encode(c),
++    }));
++    let read = vi.fn();
++    for (const r of reads) {
++      read = read.mockResolvedValueOnce(r);
++    }
++    read = read.mockResolvedValueOnce({ done: true, value: undefined });
++
++    return {
++      ok: true,
++      headers,
++      body: {
++        getReader: () => ({ read, releaseLock: vi.fn() }),
++      },
++    };
++  }
++
++  /** Drain a stream to completion (triggers SSE parsing + final settlement). */
++  async function drain(
++    stream: AsyncIterable<import("@/ports").ChatDeltaEvent>
++  ): Promise<void> {
++    for await (const _ of stream) {
++      // discard deltas; we assert on `final` / request shape
++    }
++  }
++
++  describe("completionStream method", () => {
+     const basicParams = {
+       model: "gpt-3.5-turbo", // model is required (no env fallback)
+       messages: [{ role: "user" as const, content: "Hello world" }],
+       caller: testCaller,
+     };
+ 
+-    const mockSuccessResponse = {
+-      id: "chatcmpl-test-123",
+-      choices: [
+-        {
+-          message: {
+-            role: "assistant",
+-            content: "Hello! How can I help you today?",
+-          },
+-          finish_reason: "stop",
+-        },
+-      ],
+-      usage: {
+-        prompt_tokens: 10,
+-        completion_tokens: 8,
+-        total_tokens: 18,
+-      },
+-      response_cost: 0.0002,
+-    };
++    /** Standard happy-path SSE frames: one content delta, a usage event, DONE. */
++    const successFrames = [
++      'data: {"choices":[{"delta":{"content":"Hello! How can I help you today?"},"finish_reason":null}]}\n\n',
++      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
++      'data: {"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}\n\n',
++      "data: [DONE]\n\n",
++    ];
+ 
+     it("sends correct request to LiteLLM API with master key auth", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => mockSuccessResponse,
+-      });
++      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames));
+ 
+-      await adapter.completion(basicParams);
++      const { stream } = await adapter.completionStream(basicParams);
++      await drain(stream);
+ 
+       expect(mockFetch).toHaveBeenCalledWith(
+         "https://api.test-litellm.com/v1/chat/completions",
+@@ -117,6 +141,8 @@ describe("LiteLlmAdapter", () => {
+               request_id: "req-test-abc",
+               existing_trace_id: "trace-test-xyz",
+             },
++            stream: true,
++            stream_options: { include_usage: true },
+           }),
+           signal: expect.any(AbortSignal),
+         }
+@@ -124,18 +150,15 @@ describe("LiteLlmAdapter", () => {
+     });
+ 
+     it("uses provided parameters over defaults", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => mockSuccessResponse,
+-      });
++      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames));
+ 
+-      await adapter.completion({
++      const { stream } = await adapter.completionStream({
+         ...basicParams,
+         model: "custom-model",
+         temperature: 0.2,
+         maxTokens: 1024,
+       });
++      await drain(stream);
+ 
+       const firstCall = mockFetch.mock.calls[0];
+       expect(firstCall).toBeDefined();
+@@ -153,21 +176,21 @@ describe("LiteLlmAdapter", () => {
+           request_id: "req-test-abc",
+           existing_trace_id: "trace-test-xyz",
+         },
++        stream: true,
++        stream_options: { include_usage: true },
+       });
+     });
+ 
+-    it("returns properly formatted response with usage and cost from header", async () => {
+-      const mockHeaders = new Headers();
+-      mockHeaders.set("x-litellm-response-cost", "0.0002");
+-      mockHeaders.set("x-litellm-call-id", "litellm-call-abc-123");
++    it("resolves final with usage and cost from header", async () => {
++      const headers = new Headers();
++      headers.set("x-litellm-response-cost", "0.0002");
++      headers.set("x-litellm-call-id", "litellm-call-abc-123");
+ 
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: mockHeaders,
+-        json: async () => mockSuccessResponse,
+-      });
++      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames, headers));
+ 
+-      const result = await adapter.completion(basicParams);
++      const { stream, final } = await adapter.completionStream(basicParams);
++      await drain(stream);
++      const result = await final;
+ 
+       expect(result).toEqual({
+         message: {
+@@ -175,7 +198,7 @@ describe("LiteLlmAdapter", () => {
+           content: "Hello! How can I help you today?",
+         },
+         finishReason: "stop",
+-        providerMeta: mockSuccessResponse,
++        providerMeta: { model: "gpt-3.5-turbo", provider: "openai" },
+         usage: {
+           promptTokens: 10,
+           completionTokens: 8,
+@@ -186,22 +209,17 @@ describe("LiteLlmAdapter", () => {
+         // New fields per AI_SETUP_SPEC.md
+         promptHash: expect.any(String), // SHA-256 hash of canonical payload
+         resolvedProvider: "openai", // Inferred from "gpt-" prefix in model name
+-        resolvedModel: "gpt-3.5-turbo", // From response (defaults to request model)
++        resolvedModel: "gpt-3.5-turbo", // From request param (SSE doesn't return it)
+       });
+     });
+ 
+-    it("returns message without providerCostUsd when x-litellm-response-cost header is missing", async () => {
+-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
++    it("omits providerCostUsd when no cost in header or usage event", async () => {
++      // No cost header AND no usage.cost field → cost must be absent
++      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames));
+ 
+-      // Mock response without cost header
+-      const mockHeaders = new Headers();
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: mockHeaders,
+-        json: async () => mockSuccessResponse,
+-      });
+-
+-      const result = await adapter.completion(basicParams);
++      const { stream, final } = await adapter.completionStream(basicParams);
++      await drain(stream);
++      const result = await final;
+ 
+       // Message should still be returned
+       expect(result.message.content).toBe("Hello! How can I help you today?");
+@@ -216,20 +234,12 @@ describe("LiteLlmAdapter", () => {
+         completionTokens: 8,
+         totalTokens: 18,
+       });
+-
+-      // Note: Missing cost header logging removed from adapter
+-      // Feature layer handles this via completion.ts logging
+-      warnSpy.mockRestore();
+     });
+ 
+     it("handles multiple messages correctly", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => mockSuccessResponse,
+-      });
++      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames));
+ 
+-      await adapter.completion({
++      const { stream } = await adapter.completionStream({
+         ...basicParams,
+         messages: [
+           { role: "system", content: "You are helpful" },
+@@ -238,6 +248,7 @@ describe("LiteLlmAdapter", () => {
+           { role: "user", content: "How are you?" },
+         ],
+       });
++      await drain(stream);
+ 
+       const firstCall = mockFetch.mock.calls[0];
+       expect(firstCall).toBeDefined();
+@@ -260,65 +271,24 @@ describe("LiteLlmAdapter", () => {
+         text: async () => '{"error":"invalid api key"}',
+       });
+ 
+-      await expect(adapter.completion(basicParams)).rejects.toThrow(
++      await expect(adapter.completionStream(basicParams)).rejects.toThrow(
+         "LiteLLM API error: 401 Unauthorized"
+       );
+     });
+ 
+-    it("throws error when response has no content", async () => {
+-      const invalidResponse = {
+-        id: "test-id",
+-        choices: [
+-          {
+-            message: {}, // no content
+-            finish_reason: "stop",
+-          },
+-        ],
+-        response_cost: 0.0002,
+-      };
+-
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => invalidResponse,
+-      });
+-
+-      await expect(adapter.completion(basicParams)).rejects.toThrow(
+-        "Invalid response from LiteLLM"
+-      );
+-    });
+-
+-    it("throws error when response has no choices", async () => {
+-      const invalidResponse = {
+-        id: "test-id",
+-        choices: null,
+-        response_cost: 0.0002,
+-      };
+-
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => invalidResponse,
+-      });
+-
+-      await expect(adapter.completion(basicParams)).rejects.toThrow(
+-        "Invalid response from LiteLLM"
+-      );
+-    });
+-
+     it("handles fetch network error", async () => {
+       mockFetch.mockRejectedValueOnce(new Error("Network error"));
+ 
+-      await expect(adapter.completion(basicParams)).rejects.toThrow(
+-        "LiteLLM network error: Network error"
++      await expect(adapter.completionStream(basicParams)).rejects.toThrow(
++        "LiteLLM stream init failed: Network error"
+       );
+     });
+ 
+     it("handles unknown error", async () => {
+       mockFetch.mockRejectedValueOnce("Unknown error string");
+ 
+-      await expect(adapter.completion(basicParams)).rejects.toThrow(
+-        "LiteLLM completion failed: Unknown error"
++      await expect(adapter.completionStream(basicParams)).rejects.toThrow(
++        "LiteLLM stream init failed: Unknown error"
+       );
+     });
+ 
+@@ -328,100 +298,41 @@ describe("LiteLlmAdapter", () => {
+         caller: testCaller,
+       };
+ 
+-      await expect(adapter.completion(paramsWithoutModel)).rejects.toThrow(
+-        "LiteLLM completion requires model parameter"
+-      );
++      await expect(
++        adapter.completionStream(paramsWithoutModel)
++      ).rejects.toThrow("LiteLLM completionStream requires model parameter");
+ 
+       // Verify fetch was never called
+       expect(mockFetch).not.toHaveBeenCalled();
+     });
+ 
+     it("handles different finish reasons", async () => {
+-      const responseWithFinishReason = {
+-        ...mockSuccessResponse,
+-        choices: [
+-          {
+-            message: { content: "Response" },
+-            finish_reason: "length",
+-          },
+-        ],
+-        response_cost: 0.0002,
+-      };
+-
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => responseWithFinishReason,
+-      });
+-
+-      const result = await adapter.completion(basicParams);
++      const frames = [
++        'data: {"choices":[{"delta":{"content":"Response"},"finish_reason":null}]}\n\n',
++        'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
++        'data: {"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}\n\n',
++        "data: [DONE]\n\n",
++      ];
++      mockFetch.mockResolvedValueOnce(makeSseResponse(frames));
++
++      const { stream, final } = await adapter.completionStream(basicParams);
++      await drain(stream);
++      const result = await final;
+       expect(result.finishReason).toBe("length");
+     });
+-
+-    it("handles usage with string numbers", async () => {
+-      const responseWithStringUsage = {
+-        ...mockSuccessResponse,
+-        usage: {
+-          prompt_tokens: "15",
+-          completion_tokens: "12",
+-          total_tokens: "27",
+-        },
+-        response_cost: 0.0002,
+-      };
+-
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => responseWithStringUsage,
+-      });
+-
+-      const result = await adapter.completion(basicParams);
+-      expect(result.usage).toEqual({
+-        promptTokens: 15,
+-        completionTokens: 12,
+-        totalTokens: 27,
+-      });
+-    });
+-
+-    it("handles invalid usage numbers by defaulting to 0", async () => {
+-      const responseWithInvalidUsage = {
+-        ...mockSuccessResponse,
+-        usage: {
+-          prompt_tokens: "invalid",
+-          completion_tokens: null,
+-          total_tokens: undefined,
+-        },
+-        response_cost: 0.0002,
+-      };
+-
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => responseWithInvalidUsage,
+-      });
+-
+-      const result = await adapter.completion(basicParams);
+-      expect(result.usage).toEqual({
+-        promptTokens: 0,
+-        completionTokens: 0,
+-        totalTokens: 0,
+-      });
+-    });
+   });
+ 
+   describe("AI_SETUP_SPEC.md: Correlation ID propagation", () => {
+     it("includes request_id and trace_id in LiteLLM metadata", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => ({
+-          id: "test",
+-          choices: [{ message: { content: "test" }, finish_reason: "stop" }],
+-          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+-        }),
+-      });
++      mockFetch.mockResolvedValueOnce(
++        makeSseResponse([
++          'data: {"choices":[{"delta":{"content":"test"},"finish_reason":"stop"}]}\n\n',
++          'data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n',
++          "data: [DONE]\n\n",
++        ])
++      );
+ 
+-      await adapter.completion({
++      const { stream } = await adapter.completionStream({
+         model: "test-model",
+         messages: [{ role: "user", content: "test" }],
+         caller: {
+@@ -431,6 +342,7 @@ describe("LiteLlmAdapter", () => {
+           traceId: "trace-correlation-test",
+         },
+       });
++      await drain(stream);
+ 
+       const requestBody = JSON.parse(
+         mockFetch.mock.calls[0]?.[1]?.body as string
+@@ -460,7 +372,7 @@ describe("LiteLlmAdapter", () => {
+         text: async () => errorBody,
+       });
+ 
+-      await expect(adapter.completion(errorTestParams)).rejects.toThrow();
++      await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
+ 
+       expect(mockLoggerWarn).toHaveBeenCalledWith(
+         expect.objectContaining({
+@@ -472,7 +384,7 @@ describe("LiteLlmAdapter", () => {
+           provider: "openai",
+           responseExcerpt: expect.stringContaining("No endpoints found"),
+         }),
+-        "adapter.litellm.http_error"
++        "adapter.litellm.stream_http_error"
+       );
+     });
+ 
+@@ -486,7 +398,7 @@ describe("LiteLlmAdapter", () => {
+         text: async () => bodyWithSecret,
+       });
+ 
+-      await expect(adapter.completion(errorTestParams)).rejects.toThrow();
++      await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
+ 
+       const logPayload = mockLoggerWarn.mock.calls[0]?.[0];
+       expect(logPayload?.responseExcerpt).not.toContain("sk-1234567890");
+@@ -498,7 +410,7 @@ describe("LiteLlmAdapter", () => {
+       networkErr.cause = { code: "ECONNREFUSED" };
+       mockFetch.mockRejectedValueOnce(networkErr);
+ 
+-      await expect(adapter.completion(errorTestParams)).rejects.toThrow();
++      await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
+ 
+       expect(mockLoggerWarn).toHaveBeenCalledWith(
+         expect.objectContaining({
+@@ -507,7 +419,7 @@ describe("LiteLlmAdapter", () => {
+           causeCode: "ECONNREFUSED",
+           requestId: testCaller.requestId,
+         }),
+-        "adapter.litellm.network_error"
++        "adapter.litellm.stream_network_error"
+       );
+     });
+ 
+@@ -516,14 +428,14 @@ describe("LiteLlmAdapter", () => {
+       timeoutErr.name = "TimeoutError";
+       mockFetch.mockRejectedValueOnce(timeoutErr);
+ 
+-      await expect(adapter.completion(errorTestParams)).rejects.toThrow();
++      await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
+ 
+       expect(mockLoggerWarn).toHaveBeenCalledWith(
+         expect.objectContaining({
+           rootCauseKind: "timeout",
+           requestId: testCaller.requestId,
+         }),
+-        "adapter.litellm.network_error"
++        "adapter.litellm.stream_network_error"
+       );
+     });
+ 
+@@ -537,70 +449,14 @@ describe("LiteLlmAdapter", () => {
+         },
+       });
+ 
+-      await expect(adapter.completion(errorTestParams)).rejects.toThrow();
++      await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
+ 
+-      expect(mockLoggerWarn).toHaveBeenCalledWith(
++      // status 500 is operator-fault (bug.5056) → logged at error, not warn
++      expect(mockLoggerError).toHaveBeenCalledWith(
+         expect.objectContaining({
+           responseExcerpt: "[unreadable]",
+         }),
+-        "adapter.litellm.http_error"
+-      );
+-    });
+-  });
+-
+-  describe("bug.0057: x-litellm-spend-logs-metadata header", () => {
+-    const metadataTestParams = {
+-      model: "openai/gpt-4",
+-      messages: [{ role: "user" as const, content: "Hello" }],
+-      caller: testCaller,
+-    };
+-
+-    const mockSuccessResponse = {
+-      id: "chatcmpl-test-meta",
+-      choices: [
+-        {
+-          message: { role: "assistant", content: "Hi" },
+-          finish_reason: "stop",
+-        },
+-      ],
+-      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+-    };
+-
+-    it("sets x-litellm-spend-logs-metadata header when spendLogsMetadata provided", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => mockSuccessResponse,
+-      });
+-
+-      await adapter.completion({
+-        ...metadataTestParams,
+-        spendLogsMetadata: { run_id: "run-abc", graph_id: "langgraph:poet" },
+-      });
+-
+-      const requestOptions = mockFetch.mock.calls[0]?.[1];
+-      expect(requestOptions?.headers).toEqual(
+-        expect.objectContaining({
+-          "x-litellm-spend-logs-metadata": JSON.stringify({
+-            run_id: "run-abc",
+-            graph_id: "langgraph:poet",
+-          }),
+-        })
+-      );
+-    });
+-
+-    it("does not set x-litellm-spend-logs-metadata header when spendLogsMetadata absent", async () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => mockSuccessResponse,
+-      });
+-
+-      await adapter.completion(metadataTestParams);
+-
+-      const requestOptions = mockFetch.mock.calls[0]?.[1];
+-      expect(requestOptions?.headers).not.toHaveProperty(
+-        "x-litellm-spend-logs-metadata"
++        "adapter.litellm.stream_http_error"
+       );
+     });
+   });
+@@ -681,21 +537,18 @@ describe("LiteLlmAdapter", () => {
+   describe("LlmService interface compliance", () => {
+     it("implements LlmService interface correctly", () => {
+       const service: LlmService = adapter;
+-      expect(service.completion).toBeTypeOf("function");
++      expect(service.completionStream).toBeTypeOf("function");
+     });
+ 
+-    it("completion method returns a promise", () => {
+-      mockFetch.mockResolvedValueOnce({
+-        ok: true,
+-        headers: new Headers(),
+-        json: async () => ({
+-          id: "test",
+-          choices: [{ message: { content: "test" }, finish_reason: "stop" }],
+-          response_cost: 0.0002,
+-        }),
+-      });
++    it("completionStream method returns a promise", () => {
++      mockFetch.mockResolvedValueOnce(
++        makeSseResponse([
++          'data: {"choices":[{"delta":{"content":"test"},"finish_reason":"stop"}]}\n\n',
++          "data: [DONE]\n\n",
++        ])
++      );
+ 
+-      const result = adapter.completion({
++      const result = adapter.completionStream({
+         model: "test-model", // model is required
+         messages: [{ role: "user", content: "test" }],
+         caller: testCaller,
+diff --git a/app/tests/unit/bootstrap/container.spec.ts b/app/tests/unit/bootstrap/container.spec.ts
+index 258bc2dc..556ca35e 100644
+--- a/app/tests/unit/bootstrap/container.spec.ts
++++ b/app/tests/unit/bootstrap/container.spec.ts
+@@ -125,7 +125,7 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
+       expect(container).toHaveProperty("log");
+       expect(container).toHaveProperty("llmService");
+       expect(container).toHaveProperty("clock");
+-      expect(container.llmService.completion).toBeTypeOf("function");
++      expect(container.llmService.completionStream).toBeTypeOf("function");
+     });
+   });
+ });
+diff --git a/docs/.operator-golden-path-proof.md b/docs/.operator-golden-path-proof.md
+new file mode 100644
+index 00000000..a71e228b
+--- /dev/null
++++ b/docs/.operator-golden-path-proof.md
+@@ -0,0 +1,7 @@
++# Operator golden-path merge proof
++
++Throwaway PR opened by flock-leader (external agent, read-only on GitHub) to prove the
++operator approve-checks + node-scoped merge golden path end to end:
++held fork-PR checks -> operator run-checks -> green -> operator merge -> zero human GitHub action.
++
++Safe to delete after the proof.
+diff --git a/docs/assets/landing-page-preview.png b/docs/assets/landing-page-preview.png
+new file mode 100644
+index 00000000..b4c38638
+Binary files /dev/null and b/docs/assets/landing-page-preview.png differ
+diff --git a/docs/guides/agent-development.md b/docs/guides/agent-development.md
+index acc7a483..5866f1c2 100644
+--- a/docs/guides/agent-development.md
++++ b/docs/guides/agent-development.md
+@@ -16,6 +16,41 @@ tags: [ai, agents, dev]
+ 
+ > Quick reference for adding new agent graphs. For architecture details, see [LangGraph Patterns spec](../spec/langgraph-patterns.md).
+ 
++## Billing-safe AI: the ONLY way to call an LLM
++
++> [!CRITICAL]
++> **Every LLM call in a node MUST flow through the graph executor.** It is the only path that runs the preflight credit gate AND records a usage receipt. Calling the raw LLM transport directly silently bills the end user with no credit check and no model choice — the exact defect that shipped in a forked node's "Research/Generate" panels (bug.5042). Fair billing is mission-critical; do not work around it.
++
++**ALWAYS — pick one sanctioned entrypoint:**
++
++1. **A catalog graph** (this guide) invoked via `GraphExecutorPort.runGraph` — for chat, agents, tool-using flows.
++2. **The `completionStream` facade** (`@/app/_facades/ai/completion.server`) — for a one-shot server-side "research / generate / summarize". It starts the same billed `GraphRunWorkflow`. For a non-streaming result, drain the stream and `await final`:
++
++   ```ts
++   import { completionStream } from "@/app/_facades/ai/completion.server";
++
++   const { stream, final } = await completionStream(
++     { messages, modelRef, sessionUser /* who gets billed */ },
++     ctx,
++   );
++   for await (const _ of stream) {
++     /* drain — required so billing fires (BILLING_INDEPENDENT_OF_CLIENT) */
++   }
++   const result = await final; // credit-gated + receipt recorded
++   ```
++
++   Pass `modelRef` from the user's `ModelPicker` selection — never hardcode a model. Insufficient credits surface as a terminal `error` event before the response commits; show it, don't swallow it.
++
++**NEVER:**
++
++- ❌ Inject `LlmService` into a feature/route and call `.completionStream(...)`. This skips the `PreflightCreditCheckDecorator` + `UsageCommitDecorator` stack. **CI fails** (`no-direct-completion-executestream.stack.test.ts`).
++- ❌ Reach for a non-streaming `LlmService.completion(...)` — it was removed for this reason. Drain the stream + `await final` instead.
++- ❌ Hardcode a "free" model to dodge the credit gate. Free vs paid is resolved server-side from the model catalog; the gate already returns 0 credits for free models.
++
++**The ONE exception — platform/system billing (not the end user):** background jobs or platform features that must bill a _system_ account require **explicit human sign-off** and STILL route through the graph executor, bound to a designated system billing account. There is no sanctioned path that skips the executor. If you think you need one, file a bug linking your work item and ask first.
++
++`LlmService` (`@/ports/llm.port`) is **executor-internal**: its only sanctioned consumers are `features/ai/services/completion.ts` and the in-proc completion adapter. The `BILLABLE_AI_THROUGH_EXECUTOR` and `CREDITS_ENFORCED_AT_EXECUTION_PORT` invariants govern this seam.
++
+ ## When to Use This
+ 
+ You are adding a new AI agent graph. This covers shared graph implementations (Tier 1a, `packages/langgraph-graphs`), node-local runtime catalogs (Tier 1b, `graphs/`), and composed multi-node graphs (Tier 2).
+@@ -24,11 +59,11 @@ You are adding a new AI agent graph. This covers shared graph implementations (T
+ 
+ Per `SINGLE_DOMAIN_HARD_FAIL` (see [`node-ci-cd-contract.md`](../spec/node-ci-cd-contract.md#single-domain-scope)) and the bug.0319 substrate move, decide where the agent lives before scaffolding files:
+ 
+-| Question                                                                 | Put implementation in                          | Expose through                     | Reference graph |
+-| ------------------------------------------------------------------------ | ---------------------------------------------- | ---------------------------------- | --------------- |
+-| Should every node runtime expose this agent? (e.g. `brain`, `poet`)      | `packages/langgraph-graphs/src/graphs/<name>/` | `NODE_LANGGRAPH_CATALOG`           | `ponderer/`     |
+-| Is this operator lifecycle-only? (e.g. `pr-manager`, `operating-review`) | `packages/langgraph-graphs/src/graphs/<name>/` | `OPERATOR_LANGGRAPH_CATALOG`       | `pr-manager/`   |
+-| Is this specific to one node fork?                                       | `graphs/src/graphs/<name>/`       | `graphs/src/index.ts` | local package   |
++| Question                                                                 | Put implementation in                          | Expose through               | Reference graph |
++| ------------------------------------------------------------------------ | ---------------------------------------------- | ---------------------------- | --------------- |
++| Should every node runtime expose this agent? (e.g. `brain`, `poet`)      | `packages/langgraph-graphs/src/graphs/<name>/` | `NODE_LANGGRAPH_CATALOG`     | `ponderer/`     |
++| Is this operator lifecycle-only? (e.g. `pr-manager`, `operating-review`) | `packages/langgraph-graphs/src/graphs/<name>/` | `OPERATOR_LANGGRAPH_CATALOG` | `pr-manager/`   |
++| Is this specific to one node fork?                                       | `graphs/src/graphs/<name>/`                    | `graphs/src/index.ts`        | local package   |
+ 
+ Default to the narrowest runtime catalog. Promoting node-local → shared is a deliberate hoist. Adding an operator lifecycle graph to the default node catalog leaks operator-only affordances into node-template forks.
+ 
+diff --git a/docs/guides/new-node-styling.md b/docs/guides/new-node-styling.md
+index a5c43f91..bafa810e 100644
+--- a/docs/guides/new-node-styling.md
++++ b/docs/guides/new-node-styling.md
+@@ -96,11 +96,32 @@ export const metadata: Metadata = {
+ 
+ ## 4. Homepage
+ 
+-File:
++Primary file:
++
++- `app/src/features/home/content.ts` ← **edit this**
++
++The template now ships a full, multi-section landing page (the same shape the Poly
++and Resy nodes use): an animated hero with a live agent-stream console, a "showcase
++cards" grid, a public "activity feed" of explainable signals, and a closing stats
++band. You do **not** rebuild this layout per node — the layout components in
++`app/src/features/home/components/*` are generic and read everything from
++`content.ts`.
++
++A first-class customization is **words + colors**:
++
++1. Open `content.ts` and walk it top to bottom. Replace every placeholder —
++   `HERO`, `AGENT_STREAM_SEQUENCES`, `SHOWCASE_*`, `FEED_*`, `STATS` — with copy and
++   data that sell **your** node's mission. Keep the data _shapes_; change the values.
++2. Set your brand hue in `tailwind.css` (section 2 above). The hero gradient,
++   pills, bars, and feed all follow `--primary` / `--accent-*` automatically.
+ 
+-- `app/src/app/(public)/page.tsx`
++That's it for most nodes. The page (`app/src/app/(public)/page.tsx`) composes the
++sections and redirects signed-in users to `/chat`; you rarely touch it. Only edit
++the components in `components/*` if you need to add or remove a whole section.
+ 
+-Customize the public landing page hero, calls to action, and domain-specific copy. Signed-in users redirect to `/chat`.
++> Reference customizations: Poly (prediction markets — "Bet smarter. Together.")
++> and Resy (reservations) both started from this exact framework and changed only
++> content + hue. Aim for that bar, not a one-token recolor.
+ 
+ ## 5. Chat Defaults
+ 
+@@ -117,7 +138,7 @@ Tailor the default graph and graph list to the node's domain. Prediction-market
+ - [ ] Update visible node name and external links.
+ - [ ] Pick a primary hue and update `tailwind.css` light and dark variables.
+ - [ ] Set `layout.tsx` metadata.
+-- [ ] Customize the public homepage.
++- [ ] Customize the public homepage by rewriting `app/src/features/home/content.ts` (hero, agent stream, showcase cards, activity feed, stats).
+ - [ ] Customize chat graph defaults and suggestions.
+ - [ ] Verify `pnpm check` passes.
+ - [ ] Verify the dev server shows the expected logo, colors, and name.
+diff --git a/k8s/external-secrets/candidate-a/external-secret.yaml b/k8s/external-secrets/candidate-a/external-secret.yaml
+index 0aeb19b5..c219153c 100644
+--- a/k8s/external-secrets/candidate-a/external-secret.yaml
++++ b/k8s/external-secrets/candidate-a/external-secret.yaml
+@@ -3,20 +3,20 @@
+ apiVersion: external-secrets.io/v1
+ kind: ExternalSecret
+ metadata:
+-  name: red-env-secrets
++  name: node-template-env-secrets
+   namespace: cogni-candidate-a
+   labels:
+     app.kubernetes.io/part-of: cogni-secrets-substrate
+-    app.kubernetes.io/component: red
++    app.kubernetes.io/component: node-template
+ spec:
+   refreshInterval: 1h
+   secretStoreRef:
+     name: openbao-backend
+     kind: ClusterSecretStore
+   target:
+-    name: red-env-secrets
++    name: node-template-env-secrets
+     creationPolicy: Owner
+     deletionPolicy: Retain
+   dataFrom:
+     - extract:
+-        key: candidate-a/red
++        key: candidate-a/node-template
+diff --git a/k8s/external-secrets/preview/external-secret.yaml b/k8s/external-secrets/preview/external-secret.yaml
+index c1f2f835..35eea218 100644
+--- a/k8s/external-secrets/preview/external-secret.yaml
++++ b/k8s/external-secrets/preview/external-secret.yaml
+@@ -3,20 +3,20 @@
+ apiVersion: external-secrets.io/v1
+ kind: ExternalSecret
+ metadata:
+-  name: red-env-secrets
++  name: node-template-env-secrets
+   namespace: cogni-preview
+   labels:
+     app.kubernetes.io/part-of: cogni-secrets-substrate
+-    app.kubernetes.io/component: red
++    app.kubernetes.io/component: node-template
+ spec:
+   refreshInterval: 1h
+   secretStoreRef:
+     name: openbao-backend
+     kind: ClusterSecretStore
+   target:
+-    name: red-env-secrets
++    name: node-template-env-secrets
+     creationPolicy: Owner
+     deletionPolicy: Retain
+   dataFrom:
+     - extract:
+-        key: preview/red
++        key: preview/node-template
+diff --git a/k8s/external-secrets/production/external-secret.yaml b/k8s/external-secrets/production/external-secret.yaml
+index c28449eb..f4dfa338 100644
+--- a/k8s/external-secrets/production/external-secret.yaml
++++ b/k8s/external-secrets/production/external-secret.yaml
+@@ -3,20 +3,20 @@
+ apiVersion: external-secrets.io/v1
+ kind: ExternalSecret
+ metadata:
+-  name: red-env-secrets
++  name: node-template-env-secrets
+   namespace: cogni-production
+   labels:
+     app.kubernetes.io/part-of: cogni-secrets-substrate
+-    app.kubernetes.io/component: red
++    app.kubernetes.io/component: node-template
+ spec:
+   refreshInterval: 1h
+   secretStoreRef:
+     name: openbao-backend
+     kind: ClusterSecretStore
+   target:
+-    name: red-env-secrets
++    name: node-template-env-secrets
+     creationPolicy: Owner
+     deletionPolicy: Retain
+   dataFrom:
+     - extract:
+-        key: production/red
++        key: production/node-template
+diff --git a/packages/ai-core/src/execution/error-codes.ts b/packages/ai-core/src/execution/error-codes.ts
+index 3549d9fa..feedff41 100644
+--- a/packages/ai-core/src/execution/error-codes.ts
++++ b/packages/ai-core/src/execution/error-codes.ts
+@@ -24,8 +24,12 @@ import { isLlmError } from "./llm-errors";
+  * - timeout: Request exceeded time limit
+  * - aborted: Request was cancelled (e.g., AbortSignal)
+  * - rate_limit: Provider rate limit exceeded (HTTP 429)
+- * - internal: Unexpected error during execution (server fault)
+- * - insufficient_credits: Billing account lacks sufficient credits
++ * - internal: Unexpected error during execution (server fault — our bug)
++ * - insufficient_credits: The USER's billing account lacks sufficient credits (user-fixable)
++ * - provider_unavailable: Upstream LLM provider is down or the OPERATOR's provider
++ *   account is unfunded (e.g. OpenRouter 402 / 5xx). Operator-fault — the user
++ *   cannot fix it. MUST stay distinct from insufficient_credits so the UI never
++ *   tells the user to top up their balance for an operator billing problem (bug.5056).
+  */
+ export const AI_EXECUTION_ERROR_CODES = [
+   "invalid_request",
+@@ -35,6 +39,7 @@ export const AI_EXECUTION_ERROR_CODES = [
+   "rate_limit",
+   "internal",
+   "insufficient_credits",
++  "provider_unavailable",
+ ] as const;
+ 
+ export type AiExecutionErrorCode = (typeof AI_EXECUTION_ERROR_CODES)[number];
+@@ -80,6 +85,11 @@ export function isAiExecutionError(error: unknown): error is AiExecutionError {
+  * 2. AiExecutionError (.code field) → use code
+  * 3. LlmError (.status, .kind) → map to code
+  * 4. Default → "internal"
++ *
++ * FAULT_PARTY_BEFORE_BUCKET: upstream provider failures the operator must fix
++ * (402 unfunded provider account, 5xx provider outage) map to "provider_unavailable",
++ * NOT "internal". Collapsing them to "internal" is what masked bug.5056 as a generic
++ * "Something went wrong" 500. See docs/spec/error-handling.md.
+  */
+ export function normalizeErrorToExecutionCode(
+   error: unknown
+@@ -102,6 +112,11 @@ export function normalizeErrorToExecutionCode(
+     // Status-first (most reliable - HTTP status code)
+     if (error.status === 429) return "rate_limit";
+     if (error.status === 408) return "timeout";
++    // Upstream provider billing/availability — operator-fault, NOT "internal" (bug.5056).
++    if (error.status === 402) return "provider_unavailable";
++    if (typeof error.status === "number" && error.status >= 500) {
++      return "provider_unavailable";
++    }
+ 
+     // Kind fallback
+     switch (error.kind) {
+@@ -111,6 +126,8 @@ export function normalizeErrorToExecutionCode(
+         return "timeout";
+       case "aborted":
+         return "aborted";
++      case "provider_5xx":
++        return "provider_unavailable";
+       default:
+         return "internal";
+     }
+diff --git a/packages/knowledge-base/src/seeds/base.ts b/packages/knowledge-base/src/seeds/base.ts
+index 5082b2e7..28162832 100644
+--- a/packages/knowledge-base/src/seeds/base.ts
++++ b/packages/knowledge-base/src/seeds/base.ts
+@@ -38,6 +38,8 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
+     content:
+       "**Use when:** any agent starts a session on this node (coding, launch, research, governance, validation, or ops). This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
+       "This is the starter orientation every Cogni node inherits from the base seed set. Replace the placeholders below with this node's specifics, and write the node's own living map as a sibling `<slug>-agent-orientation` entry (a re-seed may overwrite this starter, so node-owned context belongs in the slug-specific entry).\n\n" +
++      "## Start here: the required CICD flow\n" +
++      "Before shipping any code, follow the canonical end-to-end CICD sequence on the operator hub: recall `cicd-e2e-required-sequence` (`GET https://cognidao.org/api/v1/knowledge/cicd-e2e-required-sequence`). Required + ordered: fork+PR, run-checks, CI green, flight + validate, merge, promote. You are read-only on GitHub; the operator bridges every privileged step via your Bearer key.\n\n" +
+       "## Where to edit\n" +
+       "- App code, node-owned packages, and `.cogni/repo-spec.yaml` (the running app reads its OWN node spec, not the monorepo root). Fill in the real paths for this node.\n\n" +
+       "## What NOT to run\n" +
+@@ -48,6 +50,11 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
+       "- Deploys ship prebuilt images by SHA; verify the live build before validating.\n\n" +
+       "## What to recall next\n" +
+       "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
++      "## Standards (refine for this node)\n" +
++      "- Strict typing (no `any`), Zod at boundaries, hexagonal layering, Pino→Loki observability, idempotent operations. Purge legacy — no backwards-compat shims unless asked.\n\n" +
++      "## Knowledge-hub conventions\n" +
++      "- Durable learnings refine back into the hub (recall→refine over write-new), never inline comments or docs sprawl.\n" +
++      "- A new entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands.\n\n" +
+       "Refine whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes.",
+     sourceType: "human",
+     confidencePct: 60,
+diff --git a/packages/repo-spec/src/accessors.ts b/packages/repo-spec/src/accessors.ts
+index 0afd541c..1f3d30ec 100644
+--- a/packages/repo-spec/src/accessors.ts
++++ b/packages/repo-spec/src/accessors.ts
+@@ -85,6 +85,21 @@ export function extractNodeMission(spec: RepoSpec): string | null {
+   return spec.intent?.mission ?? null;
+ }
+ 
++/** Punchy ~5-word gallery/heading hook from `intent.hook`, or null when undeclared. */
++export function extractNodeHook(spec: RepoSpec): string | null {
++  return spec.intent?.hook ?? null;
++}
++
++/** Node's self-hosted brand thumbnail URL (e.g. its OG image) from `intent.brand.thumbnail`. */
++export function extractNodeThumbnail(spec: RepoSpec): string | null {
++  return spec.intent?.brand?.thumbnail ?? null;
++}
++
++/** Monogram-tint brand color from `intent.brand.color`, or null when undeclared. */
++export function extractNodeBrandColor(spec: RepoSpec): string | null {
++  return spec.intent?.brand?.color ?? null;
++}
++
+ /**
+  * Extract scope_id from parsed repo-spec.
+  * Throws if scope_id is not present (required for ledger scope gating).
+diff --git a/packages/repo-spec/src/index.ts b/packages/repo-spec/src/index.ts
+index c9f57bae..0a021685 100644
+--- a/packages/repo-spec/src/index.ts
++++ b/packages/repo-spec/src/index.ts
+@@ -20,11 +20,14 @@ export {
+   extractGovernanceConfig,
+   extractLedgerApprovers,
+   extractLedgerConfig,
++  extractNodeBrandColor,
++  extractNodeHook,
+   extractNodeId,
+   extractNodeMission,
+   extractNodeName,
+   extractNodePath,
+   extractNodes,
++  extractNodeThumbnail,
+   extractOperatorWalletConfig,
+   extractOwningNode,
+   extractPaymentConfig,
+diff --git a/packages/repo-spec/src/schema.ts b/packages/repo-spec/src/schema.ts
+index 3d66ba71..5ffe93ca 100644
+--- a/packages/repo-spec/src/schema.ts
++++ b/packages/repo-spec/src/schema.ts
+@@ -281,14 +281,29 @@ export const repoSpecSchema = z
+     node_id: z.string().uuid("node_id must be a valid UUID"),
+ 
+     /**
+-     * Human-facing node identity (display, not a key). `name` is the node slug
+-     * (e.g. `operator`, `beacon`); `mission` is the one-line core mission the
+-     * cognition substrate surfaces at session start. Optional for back-compat.
++     * Human-facing node identity (display, not a key) — the SSOT a node self-describes from. `name` is
++     * the node slug (e.g. `operator`, `beacon`). The display layers, all projected to the node's public
++     * `/.well-known/agent.json` so the operator reads them rather than hardcoding (IDENTITY_IS_REPO_SPEC_PROJECTION):
++     *   - `hook`    — punchy ~5-word tagline shown on gallery cards / node-page headings.
++     *   - `mission` — the 1–3 sentence north-star the cognition substrate surfaces at session start.
++     *   - `brand`   — visual identity: `thumbnail` is a URL the NODE hosts (e.g. its OG image) so brand
++     *     stays sovereign + current with no operator asset-hosting; `color` tints the monogram fallback.
++     * All optional for back-compat (a node with only `name` falls back to title-cased slug + monogram).
+      */
+     intent: z
+       .object({
+         name: z.string().min(1),
++        hook: z.string().min(1).max(80).optional(),
+         mission: z.string().min(1).optional(),
++        brand: z
++          .object({
++            // Relative PATH the node serves from its OWN app `public/` (e.g. `/showcase/foo.png`), NOT
++            // an absolute URL — the operator resolves it against the node's env-host so it's correct on
++            // test/preview/prod with no CDN and no operator asset-hosting. Absolute URLs allowed too.
++            thumbnail: z.string().optional(),
++            color: z.string().optional(),
++          })
++          .optional(),
+       })
+       .passthrough()
+       .optional(),
+diff --git a/scripts/check-node-ci-workflow.mjs b/scripts/check-node-ci-workflow.mjs
+index 243383fa..f92562cd 100644
+--- a/scripts/check-node-ci-workflow.mjs
++++ b/scripts/check-node-ci-workflow.mjs
+@@ -93,10 +93,33 @@ expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.name, "PR Build", "workflow
+ expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "pull_request");
+ expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "merge_group");
+ expectMainPush(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow);
+-expectNoWorkflowDispatch(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow);
++// MONOREPO PARITY (bug.5057): pr-build MUST support the operator's RBAC-gated
++// trusted-build `workflow_dispatch` (build an approved fork PR head → flightable
++// image). This is the operator dispatch path, NOT a fork self-pushing — the
++// `should_push=false` fork guard below still holds. The old `expectNoWorkflowDispatch`
++// here was split-brain vs the monorepo and is removed; require the trusted-build
++// inputs instead so the dispatch contract can't silently drift.
++expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "workflow_dispatch");
++{
++  const dispatchInputs =
++    prBuildWorkflow?.on?.workflow_dispatch?.inputs ?? {};
++  for (const required of ["head_repo", "head_sha"]) {
++    if (!Object.hasOwn(dispatchInputs, required)) {
++      fail(
++        PR_BUILD_WORKFLOW_PATH,
++        `workflow_dispatch must declare the trusted-build input "${required}"`
++      );
++    }
++  }
++}
+ expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.permissions?.contents, "read", "permissions.contents");
+ expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.permissions?.packages, "write", "permissions.packages");
+-expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.concurrency?.["cancel-in-progress"], true, "concurrency.cancel-in-progress");
++// cancel-in-progress must NOT cancel a push:main (publishes the deployable) or a
++// trusted dispatch (each fork build keyed by its own head_sha) — same as the monorepo.
++// So it is an expression, not a literal `true`; assert it is present.
++if (prBuildWorkflow?.concurrency?.["cancel-in-progress"] === undefined) {
++  fail(PR_BUILD_WORKFLOW_PATH, "concurrency.cancel-in-progress must be set");
++}
+ 
+ const resolveJob = prBuildWorkflow?.jobs?.resolve;
+ if (!resolveJob) fail(PR_BUILD_WORKFLOW_PATH, "jobs must include resolve");

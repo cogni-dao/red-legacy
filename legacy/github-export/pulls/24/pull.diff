@@ -1,0 +1,16 @@
+diff --git a/.agents/commands b/.agents/commands
+new file mode 120000
+index 00000000..0b631dd5
+--- /dev/null
++++ b/.agents/commands
+@@ -0,0 +1 @@
++../.claude/commands
+\ No newline at end of file
+diff --git a/.agents/skills b/.agents/skills
+new file mode 120000
+index 00000000..454b8427
+--- /dev/null
++++ b/.agents/skills
+@@ -0,0 +1 @@
++../.claude/skills
+\ No newline at end of file

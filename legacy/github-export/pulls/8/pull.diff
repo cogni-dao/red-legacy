@@ -1,0 +1,2669 @@
+diff --git a/.claude/skills/test-expert/SKILL.md b/.claude/skills/test-expert/SKILL.md
+index 07741a96..6485e59c 100644
+--- a/.claude/skills/test-expert/SKILL.md
++++ b/.claude/skills/test-expert/SKILL.md
+@@ -1,183 +1,142 @@
+ ---
+ name: test-expert
+-description: Authoritative reference for the cogni-template test pyramid and production-like e2e test topology — enforcement vs test layers, vitest configs, infra prereqs, GitHub/DoltHub test org boundaries, the cogni-operator-test app, what agents can/can't run locally, coverage tracking, and the non-obvious gotchas that bite every time. Use this skill whenever the user is writing a new test, asking "which layer does this belong in", debugging a flaky test, hitting CWD/env-loading issues, deciding between unit/component/stack/external, running any `pnpm test:*` or `pnpm arch:check` / `pnpm lint` command, working with testcontainers, touching fake adapters or `APP_ENV=test`, troubleshooting skip-gates, seeing errors from `.env.test` not loading, wondering about coverage or whether a test will run in CI, or trying to decide whether to run stack/e2e locally vs defer to CI. Also trigger when the user mentions mocking the database, Privy/GitHub App construction errors in tests, the smee proxy, `pnpm test:smee`, validating the agent API, the candidate/test GitHub App, `cogni-test-org`, `cogni-test-nodes`, node-formation flight testing, or anything that smells like test-environment setup. Short-circuits the usual "spelunk through docs + configs" lookup.
++description: Authoritative reference for THIS node's test setup — the test layers it actually ships (unit, component, external, stack), the vitest configs, what runs in CI vs locally, testcontainers/RLS component setup, fake adapters + APP_ENV=test, and the non-obvious gotchas (dotenv CWD trap, skip-gate ordering, never-mock-the-DB). Use whenever writing a new test, deciding "which layer does this belong in", debugging a flaky test or a `.env.test`-not-loading error, running any `pnpm test:*`, working with testcontainers, touching fake adapters, or wondering whether a test runs in CI. This node is a single flat-layout app — not the operator monorepo.
+ ---
+ 
+ # test-expert
+ 
+-Reference desk for writing and debugging tests in this monorepo. Leads with the matrix; gotchas follow because half of test failures here trace back to one of eight repeated mistakes.
++Reference desk for writing and debugging tests in **this node** (a single flat-layout app,
++`app/` at repo root — not the operator monorepo's `nodes/<node>/` tree). Leads with the
++matrix; gotchas follow, because most test failures here trace back to one of a few repeated
++mistakes.
+ 
+-There are two distinct things people lump together as "tests":
++Two distinct things get lumped together as "tests":
++- **Enforcement** — static checks that fail the build when rules are violated (typecheck,
++  lint, format, generate-cleanliness).
++- **Test layers** — vitest suites that exercise code behavior.
+ 
+-- **Enforcement** — static checks run in CI that fail builds when rules are violated (typecheck, lint, dep-cruiser, format, doc invariants).
+-- **Test layers** — vitest (+ Playwright) suites that exercise code behavior.
++## What actually runs in CI
+ 
+-The matrix below separates them because their tradeoffs, speeds, and fix patterns are different.
++`.github/workflows/ci.yaml` runs exactly three jobs on a PR: **`static`**, **`unit`**,
++**`component`**. Everything else (external, stack, money) is local-only — there is no CI job
++for it. Know which bucket your change lands in before you push.
+ 
+-## Enforcement matrix (not vitest — static checks)
++| CI job        | What it covers                                              | Local command            |
++| ------------- | ---------------------------------------------------------- | ------------------------ |
++| **static**    | typecheck + lint + format + db generate-clean              | `pnpm check`             |
++| **unit**      | the no-infra vitest suites (unit/contract/meta/ports/...)  | `pnpm test` (`test:ci`)  |
++| **component** | adapter ↔ real Postgres via testcontainers (incl. RLS)    | `pnpm test:component`    |
+ 
+-| Check           | Command                  | What it enforces                                         | Fix when it fails                           |
+-| --------------- | ------------------------ | -------------------------------------------------------- | ------------------------------------------- |
+-| **Typecheck**   | `pnpm typecheck`         | TS types across workspace                                | Fix the type, don't `any`-cast              |
+-| **Lint**        | `pnpm lint`              | Biome + ESLint rules                                     | `pnpm lint:fix` auto-fixes most             |
+-| **Format**      | `pnpm format:check`      | Prettier + Biome format                                  | `pnpm format` auto-fixes                    |
+-| **Arch**        | `pnpm arch:check`        | `.dependency-cruiser.cjs` layer / entry-point boundaries | Refactor the import, don't disable the rule |
+-| **Docs**        | `pnpm check:docs`        | AGENTS.md headers, metadata, work-item index             | Fix the frontmatter                         |
+-| **Root layout** | `pnpm check:root-layout` | Project root structure invariants                        | Move the misplaced file                     |
++`pnpm check` = `check:workflow && db:check && packages:build && typecheck && test:ci`. Run it
++once before committing. `pnpm db:check` validates the migration chain (see `schema-update`).
+ 
+-All of the above run in `ci.yaml`. Local bundle: `pnpm check:fast:fix` (iterate with auto-fix) → `pnpm check:fast` (strict, verify-only — what pre-push runs) → `pnpm check` (once, pre-commit).
++## Test layer matrix
+ 
+-## Test layer matrix (vitest + Playwright)
++| Layer              | Config                             | Tests live in              | Proves                                   | Infra needed                       | Command                    | In PR CI? |
++| ------------------ | ---------------------------------- | -------------------------- | ---------------------------------------- | ---------------------------------- | -------------------------- | --------- |
++| **Unit**           | `vitest.config.mts`                | `tests/unit/`              | Pure logic, no I/O                       | None                               | `pnpm test`                | ✅ (unit) |
++| **Contract**       | same                               | `tests/contract/`          | Zod shapes vs route handlers             | None (in-memory)                   | `pnpm test`                | ✅        |
++| **Meta**           | same                               | `tests/meta/`              | Doc / spec invariants                    | None                               | `pnpm test`                | ✅        |
++| **Ports**          | same                               | `tests/ports/`             | Every adapter implements its port        | None                               | `pnpm test`                | ✅        |
++| **Security**       | same                               | `tests/security/`          | Auth, RLS, injection guards              | None                               | `pnpm test`                | ✅        |
++| **Arch**           | same                               | `tests/arch/`              | Enforcement rules still catch violations | None (subprocess)                  | `pnpm test`                | ✅        |
++| **Component**      | `vitest.component.config.mts`      | `tests/component/*.int.test.ts` | Adapter ↔ real Postgres (+ RLS)     | Testcontainers (Docker)            | `pnpm test:component`      | ✅        |
++| **Stack**          | `vitest.stack.config.mts`          | `tests/stack/`             | Full HTTP through the running app        | a running test stack + `.env.test` | (config present, no script)| ❌ local  |
++| **External**       | `vitest.external.config.mts`       | `tests/external/`          | Real 3rd-party APIs                      | external creds                     | `pnpm test:external`       | ❌        |
++| **External money** | `vitest.external-money.config.mts` | `tests/external/money/`    | Real on-chain / real spend               | funded wallet, real keys           | `pnpm test:external:money` | ❌        |
+ 
+-| Layer              | Config                             | Tests live in                   | Proves                                                                                                                                                     | Infra needed                                       | Command                    | In PR CI?                                                                                                                                                                                                        |
+-| ------------------ | ---------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| **Unit**           | `vitest.config.mts`                | `tests/unit/`                   | Pure logic, no I/O                                                                                                                                         | None                                               | `pnpm test`                | ✅ (via `test:ci`)                                                                                                                                                                                               |
+-| **Meta**           | same                               | `tests/meta/`                   | Doc / spec invariants                                                                                                                                      | None                                               | `pnpm test:meta`           | ✅                                                                                                                                                                                                               |
+-| **Contract**       | same                               | `tests/contract/`               | Zod shapes vs route handlers                                                                                                                               | None (in-memory)                                   | `pnpm test:contract`       | ✅                                                                                                                                                                                                               |
+-| **Ports**          | same                               | `tests/ports/`                  | Every adapter implements its port                                                                                                                          | None                                               | (in `pnpm test`)           | ✅                                                                                                                                                                                                               |
+-| **Security**       | same                               | `tests/security/`               | Auth, RLS, injection guards                                                                                                                                | None                                               | (in `pnpm test`)           | ✅                                                                                                                                                                                                               |
+-| **Arch (meta)**    | same                               | `tests/arch/`                   | _Enforcement itself hasn't been weakened_ — spawns `depcruise` against arch-probe fixtures to prove rules still catch violations                           | None (subprocess)                                  | `pnpm test:arch`           | ✅                                                                                                                                                                                                               |
+-| **Lint (meta)**    | same                               | `tests/lint/`                   | Verifies lint-rule config hasn't been weakened — same meta-test pattern as `tests/arch/`. Catches an LLM disabling an ESLint/Biome rule to make a PR pass. | None                                               | `pnpm test:lint`           | ✅                                                                                                                                                                                                               |
+-| **Component**      | `vitest.component.config.mts`      | `tests/component/*.int.test.ts` | Adapter ↔ real Postgres                                                                                                                                   | Testcontainers (Docker)                            | `pnpm test:component`      | ✅                                                                                                                                                                                                               |
+-| **Stack (single)** | `vitest.stack.config.mts`          | `tests/stack/`                  | Full HTTP through one node                                                                                                                                 | `dev:stack:test` or `docker:test:stack`            | `pnpm test:stack:dev`      | ✅                                                                                                                                                                                                               |
+-| **Stack (multi)**  | `vitest.stack-multi.config.mts`    | `tests/stack/`                  | Cross-node isolation / routing                                                                                                                             | `dev:stack:full:test`                              | `pnpm test:stack:multi`    | ✅                                                                                                                                                                                                               |
+-| **External**       | `vitest.external.config.mts`       | `tests/external/` (non-money)   | Real 3rd-party APIs                                                                                                                                        | GH App creds, Ollama, optional `pnpm test:smee`    | `pnpm test:external`       | ❌                                                                                                                                                                                                               |
+-| **External money** | `vitest.external-money.config.mts` | `tests/external/money/`         | Real on-chain + real OpenRouter spend                                                                                                                      | Funded wallet, `dev:stack` running, OpenRouter key | `pnpm test:external:money` | ❌                                                                                                                                                                                                               |
+-| **E2E**            | Playwright                         | `nodes/operator/app/e2e/`       | Browser black box against a running stack                                                                                                                  | `docker:stack`                                     | `pnpm e2e`                 | ❌ — **currently not triggered anywhere** (known gap; the old `staging-preview.yml` runner was deleted during the flighting/CI-CD refactor). Tests exist and are runnable locally; automated invocation is TODO. |
+-| **Env e2e**        | GitHub App + GH Actions + Argo     | deployed candidate/test env     | Production-like pipeline: node publish → child repo image → parent pin/flight → `/version`                                                                 | `cogni-operator-test`, test GH/DoltHub orgs, VM    | operator API + GH checks   | 🟡 Partially wired. This is the missing repeatable flight lane, not a vitest suite. See "Environment e2e test lane" below.                                                                                       |
++The no-infra suites (unit/contract/meta/ports/security/arch) all run under `pnpm test` via
++`vitest.config.mts`'s include globs — there is no separate `test:meta`/`test:contract` script.
+ 
+-### Meta note on `tests/arch/` + `tests/lint/`
++## What you can run locally
+ 
+-These are intentionally separate from the enforcement commands. `pnpm arch:check` validates the codebase _right now_. `tests/arch/` validates that the enforcement itself still works (i.e., that someone — including an LLM — hasn't quietly weakened the dep-cruiser rules to make a failing PR pass). If `arch:check` passes but `tests/arch/` would fail, that's the signal rules have been neutered. `tests/lint/` is the same pattern, currently unimplemented.
++**No infra:** `pnpm test`, `pnpm typecheck`, `pnpm check`, `pnpm db:check`.
++**Needs Docker:** `pnpm test:component` (spins up a testcontainers Postgres per run),
++`pnpm test:external` if it touches testcontainers.
++**Needs creds / a running stack — usually defer to CI or a human:** `test:external`,
++`test:external:money`, the stack lane. Default agent pattern: run unit + component locally
++(Docker permitting); for the rest, push and let CI run what it can, or ask a human.
+ 
+-## What agents can actually run locally
+-
+-For ~90% of agent sessions, infra-gated lanes are out of reach. Use this split:
+-
+-**Always available (no infra):**
+-
+-- `pnpm test`, `test:meta`, `test:contract`, `test:arch`, `test:ci` (coverage)
+-- `pnpm typecheck`, `pnpm lint`, `pnpm arch:check`, `pnpm check:docs`, `pnpm check:fast`, `pnpm check`
+-
+-**Needs Docker running:**
+-
+-- `pnpm test:component` (spins up testcontainers-postgres per run)
+-- `pnpm test:external` (testcontainers + external APIs)
+-
+-**Needs Docker + full stack + secrets — usually defer to CI:**
+-
+-- `pnpm test:stack:dev` / `:docker` / `:multi` (requires `dev:stack:test` or `docker:test:stack` running, plus `.env.test` populated)
+-- `pnpm test:external:money` (funded wallet, real $)
+-- `pnpm e2e` (full docker stack, browser)
+-
+-**Default agent pattern:** run what you can locally; for stack/e2e/money, push the branch and **defer to CI** (`ci.yaml` runs component + stack:docker), or ask the human to run `pnpm dev:stack:test` locally and then run the stack test against it.
+-
+-## Coverage — the ignored dial
+-
+-`pnpm test:ci` runs the unit suite with coverage (lcov + json-summary + text reporters). It's wired in `ci.yaml:128`. Nobody's been tracking the output lately, but the infrastructure is live — a PR adding a coverage report comment or a coverage-diff gate is a small change, not a new project.
+-
+-If the user asks "is this covered?" or "what's our coverage look like?", the answer is: run `pnpm test:ci` locally, then open `coverage/lcov-report/index.html`. Or (future) wire a CI step to comment coverage deltas on PRs.
+-
+-## Picking the right layer
+-
+-Use the lightest layer that can prove the assertion — heavier layers cost minutes, not seconds, and a misplaced test burns budget every CI run.
++## Picking the right layer — lightest that proves the assertion
+ 
+ - Pure logic, no I/O → **Unit**.
+-- Shape of an HTTP request or response → **Contract** (Zod round-trip, no server).
+-- Adapter ↔ real Postgres/Drizzle behavior → **Component** (testcontainers).
+-- Full HTTP request going through middleware, auth, services, DB → **Stack (single)**.
+-- How nodes behave when cross-calling each other → **Stack (multi)**.
+-- Real GitHub API / Ollama / OpenRouter behavior → **External**.
+-- Real on-chain transaction or real OpenRouter spend → **External money**.
+-- Production-like browser-driven black box → **E2E** (and know it only runs in deploy flows).
+-
+-If the user is about to mock the database, push back — use **Component** with testcontainers instead. Mocked DBs have previously masked broken migrations here; the convention exists for a reason.
+-
+-## Related but distinct: agent API validation
+-
+-When the user's question is "does the machine-agent API actually work end-to-end against canary or a local stack?" — that's **validation**, not testing. See `docs/guides/agent-api-validation.md`: a curl-based checklist for discover → register → execute graph → list runs → stream events. It's a human/agent-driven probe, not a CI suite. Point at that guide when the user is validating the agent API surface rather than writing a unit/component/stack test.
+-
+-## Environment e2e test lane — GitHub App + DoltHub + flight
+-
+-This is the production-like lane for questions such as "can the operator really birth a node and flight it?" It is not covered by local vitest, stack tests, or Playwright. Treat it as a disposable mini-prod environment driven by the same deploy code.
++- Shape of an HTTP request/response → **Contract** (Zod round-trip, no server).
++- Adapter ↔ real Postgres/Drizzle, or **any RLS / tenant-isolation proof** → **Component**
++  (testcontainers). This is where the RLS coverage gate lives — see `schema-update`.
++- Full HTTP through middleware/auth/services/DB → **Stack**.
++- Real GitHub/LLM/on-chain behavior → **External** / **External money**.
+ 
+-Current test topology:
++**Never mock the database.** In component/stack tests use testcontainers or the real DB.
++Mocked DBs have concealed broken migrations before; the testcontainer overhead is cheap
++insurance. If you're about to mock Postgres, write a component test instead.
+ 
+-| Boundary              | Value / rule                                                                                                                                                  | Source                                                                                                                  |
+-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+-| GitHub App            | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`. | `.claude/skills/git-app-expert/SKILL.md`, `docs/guides/github-app-webhook-setup.md`, `docs/spec/node-ci-cd-contract.md` |
+-| GitHub mint org       | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                                 | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml`                                                  |
+-| Parent pin repo       | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                               | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml`                                                            |
+-| DoltHub knowledge org | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos.   | `.claude/skills/database-expert/SKILL.md`, `docs/runbooks/dolthub-remote-bootstrap.md`                                  |
+-| Flight target         | Candidate/test DNS is `<node>-test.cognidao.org`; the operator flight path must verify `/version.buildSha` for the deployed node.                             | `docs/guides/node-formation-guide.md`, `scripts/ci/verify-buildsha.sh`                                                  |
++## The component lane is the RLS gate
+ 
+-Recent PR context to know before changing this lane:
+-
+-- #1521 taught candidate flight to detect added submodule catalog rows, resolve child images by `sha-<gitlinkSha>`, and promote per-target source SHAs.
+-- #1527 added DoltHub knowledge remote bootstrapping and proved `cogni-test-nodes/knowledge-e2e-*` creation through the DoltHub REST/SQL API.
+-- #1542 made the catalog's `image_repository` authoritative for externally built child node images (`ghcr.io/<owner>/<repo>-node`), removing GHCR inference.
+-- #1544 hardened publish retries when a child repo already exists from a partial wizard run.
+-- #1546 is the current prototype for a node-ref flight endpoint: `POST /api/v1/nodes/[id]/flight { sourceSha, environment }`. Review concerns are real; do not treat it as landed architecture until merged.
+-
+-Pareto path for repeatable env e2e:
+-
+-1. Make the **test org/app contract** explicit and audited first: `cogni-operator-test` installed all-repositories on `cogni-test-org`, `workflows:write`, `administration:write`, webhook to `https://test.cognidao.org/api/internal/webhooks/github`, creds in OpenBao for candidate/test.
+-2. Keep candidate/test disposable but production-shaped: provision with `provision-env.yml` / `scripts/setup/provision-env-vm.sh`, not hand SSH. The env must source `NODE_MINT_OWNER`, `NODE_TEMPLATE_OWNER`, `NODE_SUBMODULE_PARENT_*`, `DOLTHUB_OWNER`, `DOLTHUB_API_TOKEN`, and Dolt push creds from the same paths as preview/prod.
+-3. Add one automated smoke script for a synthetic node slug: publish via the operator API, wait for the child repo `sha-<childSha>` GHCR image, wait for the parent pin PR, merge/flight through the operator route, then assert `https://<slug>-test.cognidao.org/version` reports the child source SHA.
+-4. Only after candidate/test is repeatable should preview/prod use this path for formed nodes. Preview/prod promotion should consume the candidate-proven digest/ref; do not make preview the first place where node-ref flight is exercised.
++`tests/component/setup/testcontainers-postgres.global.ts` provisions a real Postgres with
++`provision.sh` (per-node `app_<node>`/`service_<node>` roles), runs migrations as the app
++role, then runs catalog-derived preflights: every table with a FK to `users` must have RLS
++ENABLED, every ENABLE must also FORCE. A tenant table missing RLS fails the lane before any
++test runs. When you add a tenant-scoped table, prove isolation with a 2-account
++`*.int.test.ts` under `tests/component/db/`. Full rule: the `schema-update` skill.
+ 
+ ## Gotchas — these bite repeatedly
+ 
+-1. **`APP_ENV=test` swaps fakes via the DI container.** Fake adapters live in `src/adapters/test/*/fake-*.adapter.ts` and are wired in `src/bootstrap/container.ts` via `serverEnv.isTestMode`. LLM is the exception — it's always real LiteLLM, routed to `mock-openai-api` via `litellm.test.config.yaml`. If a stack/component test is calling a real external service, it's almost always a missing fake wiring in the DI container, not a test bug.
+-
+-2. **dotenv path-CWD trap.** A vitest config that does `config({ path: ".env.test" })` resolves **relative to CWD**, not the config file. It works when the script runs from repo root. It silently **fails to load** if invoked via `pnpm -F <node> ...` or `turbo run ...` because CWD changes to the node's directory. Symptom: skip-gates think creds are missing, tests blow up at provider construction. Fix pattern:
+-
+-   ```ts
+-   const env = config({ path: path.resolve(__dirname, "../../../.env.test") });
+-   ```
+-
+-3. **Skip-gate must precede provider construction.** External tests that build Privy/GitHub-App/EVM clients must do so _inside_ `describe.skipIf(!hasCreds)` or a gated `beforeAll`, never at module scope. Module-scope construction throws on missing env → the skip never runs → red test instead of a clean skip. Reference: `work/items/bug.0314` documents four real failures from this pattern.
+-
+-4. **Testcontainers globalSetup uses `pnpm -w db:migrate:direct`.** The `-w` flag (workspace root) matters. Without it, the migrate script isn't found when globalSetup runs under `pnpm -F <node>`. See `nodes/*/app/tests/component/setup/testcontainers-postgres.global.ts`.
+-
+-5. **Never mock the database.** In component/stack/external tests, use testcontainers or the real DB. Mocked DBs have concealed production migration bugs here before — the testcontainer overhead is cheap insurance.
+-
+-6. **Sequence non-parallelism for stateful lanes.** Component + external configs use `sequence: { concurrent: false }` + `pool: forks`, `singleFork: true`. Stateful tests (shared GitHub test repo, single testcontainer DB epoch) race catastrophically in parallel. Don't remove this in a new config.
++1. **`APP_ENV=test` swaps fakes via the DI container.** Fake adapters live in
++   `app/src/adapters/test/*/fake-*.adapter.ts`, wired in `app/src/bootstrap/container.ts`. If
++   a component/stack test hits a real external service, it's almost always a missing fake
++   wiring in the container, not a test bug.
++
++2. **dotenv path-CWD trap.** A vitest config doing `config({ path: ".env.test" })` resolves
++   **relative to CWD**. It works from repo root but silently fails to load when invoked via
++   `pnpm --filter @cogni/node-template-app ...` (CWD becomes `app/`). Symptom: skip-gates
++   think creds are missing; tests blow up at provider construction. Fix: resolve from
++   `__dirname` — `config({ path: path.resolve(__dirname, "../../.env.test") })`.
++
++3. **Skip-gate must precede provider construction.** External tests that build real clients
++   must do so *inside* `describe.skipIf(!hasCreds)` or a gated `beforeAll`, never at module
++   scope. Module-scope construction throws on missing env → the skip never runs → red instead
++   of a clean skip.
++
++4. **Component globalSetup uses `pnpm -w db:migrate:direct`.** The `-w` (workspace root) flag
++   matters — without it the migrate script isn't found when globalSetup runs under a filtered
++   pnpm CWD. See `app/tests/component/setup/testcontainers-postgres.global.ts`.
++
++5. **Sequence non-parallelism for stateful lanes.** The component + external configs use
++   `sequence: { concurrent: false }` + `pool: forks`, `singleFork: true`. Stateful tests
++   (one testcontainer DB epoch) race catastrophically in parallel — don't remove this when
++   adding a config.
++
++6. **Time budgets.** Unit files <1s, component 5–30s. If a test blows past that, suspect
++   missing env (gotcha #2) before genuine slowness.
++
++## When a test is already failing — triage order
++
++1. **Env loaded?** Check the vitest header for `[dotenv] injecting env (N)`. `N=0` → `.env.test`
++   didn't load (gotcha #2).
++2. **Creds asserted before construction?** Failure inside a provider constructor, not an
++   assertion → gotcha #3.
++3. **Testcontainer / migrate?** If `db:migrate:direct` errors in component setup, read the
++   migration chain (`schema-update`) — a future-dated `when` silently no-ops; a bad RLS
++   migration fails the apply.
++4. **Shared-state flakiness?** Passes solo, fails in suite → gotcha #5.
++5. **Wrong runner?** Hitting a stack/external test locally without the stack/creds → push and
++   let CI run what it can.
+ 
+-7. **Check discipline.** `pnpm check:fast:fix` during iteration (auto-fixes format/lint, runs unit tests). `pnpm check:fast` (strict, verify-only) is what `.husky/pre-push` runs — if it fails with drift, run the `:fix` variant, commit, retry. `pnpm check` once as the pre-commit gate; never run `pnpm check` more than once per session — it's the heavyweight pipeline.
+-
+-8. **Time budgets.** Unit test files <1s. Component 5–30s. Stack 30–90s. External up to 3min (`testTimeout: 30_000` per-test; totals add up). If a test is exceeding these, first suspect missing env (see #2), not genuine slowness.
+-
+-## When the test is already failing
+-
+-Triage in this order:
++## Adding a new test — fast recipe
+ 
+-1. **Env loaded?** Check the vitest output header for `[dotenv] injecting env (N)` — if `N=0`, `.env.test` didn't load. See gotcha #2.
+-2. **Creds asserted before construction?** If the stack trace shows the failure inside a provider constructor, not an assertion, see gotcha #3.
+-3. **Testcontainer started?** If `db:migrate:direct` errors, see gotcha #4. If migrations ran but DB state is surprising, the globalSetup's test-container epoch may not match expectations — check `testcontainers-postgres.global.ts`.
+-4. **Shared-state flakiness?** If tests pass solo but fail in the suite, see gotcha #6.
+-5. **External service reachable?** For external lane: is `pnpm test:smee` running for webhook-dependent tests? Is `OLLAMA_URL` reachable? Is the funded wallet still funded for money tests?
+-6. **Am I the wrong runner?** If the user is an agent hitting a stack test locally without `dev:stack:test` running, the answer may be "push and let CI run it."
++1. Pick the lightest layer that proves the behavior (list above).
++2. Drop the file in that layer's dir with the right pattern (`*.test.ts`, or `*.int.test.ts`
++   for component).
++3. Run that layer's command first (`pnpm test` or `pnpm test:component`), not `pnpm check` —
++   fastest feedback.
++4. Each vitest config documents its invariants in its header TSDoc; read it if env/infra is
++   involved.
++5. Finish with `pnpm check` once before committing.
+ 
+ ## References
+-
+-- `docs/guides/testing.md` — APP_ENV=test pattern + fake adapter conventions
+-- `docs/guides/full-stack-testing.md` — stack-test specifics
+-- `docs/guides/agent-api-validation.md` — machine-agent API validation checklist (validation, not testing)
+-- `docs/guides/github-app-webhook-setup.md` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
+-- `docs/spec/node-ci-cd-contract.md` — submodule-pinned node CI/CD, test org identity, node-ref flight constraints
+-- `docs/runbooks/dolthub-remote-bootstrap.md` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
+-- `work/items/bug.0314.external-tests-require-more-than-env-test.md` — latest skip-gate + RPC/webhook setup bug
+-- `work/projects/proj.system-test-architecture.md` — mock-LLM + FakeLlmAdapter strategy
+-- `nodes/operator/app/tests/external/AGENTS.md` — per-lane invariants for external tests
+-- `.github/workflows/ci.yaml` — exact CI step list; compare against this matrix if anything above looks wrong
+-- CLAUDE.md — check-discipline + format-before-commit rules
+-
+-## Adding a new test — fast recipe
+-
+-1. Decide layer from the "picking the right layer" list. If unsure, default to the lightest that proves the behavior.
+-2. Drop the file into that layer's directory with the matching filename pattern (`*.test.ts`, `*.spec.ts`, or `*.int.test.ts` for component).
+-3. Run the layer's specific command first (`pnpm test:component`, `pnpm test:contract`, etc.), not `pnpm check`. Fastest feedback.
+-4. If the test needs env or infra, read the relevant config's header TSDoc — every config documents its invariants at the top.
+-5. If the layer is stack/e2e/money and you're an agent without infra access, open the PR and let CI run it rather than burning a session on local setup.
+-6. Once the new test passes in isolation, run `pnpm check:fast:fix` (auto-fix) then `pnpm check:fast` (strict). Only run `pnpm check` when ready to commit.
++- `app/vitest*.config.mts` — each config's header documents its lane's invariants.
++- `app/tests/component/setup/testcontainers-postgres.global.ts` — the RLS/role gate.
++- `infra/compose/runtime/postgres-init/provision.sh` — the role/DB provisioner the component
++  lane runs (and production uses).
++- skills: `schema-update` (migrations + RLS), `validate-candidate` (proving a deploy, not a
++  test). `.github/workflows/ci.yaml` is the source of truth for what actually gates a PR.
+diff --git a/app/package.json b/app/package.json
+index 736ba72c..dccd84da 100644
+--- a/app/package.json
++++ b/app/package.json
+@@ -105,6 +105,7 @@
+     "radix-ui": "^1.4.3",
+     "react": "19.0.0",
+     "react-dom": "19.0.0",
++    "react-force-graph-3d": "^1.29.1",
+     "recharts": "^2.15.4",
+     "rehype-raw": "^7.0.0",
+     "remark-gfm": "^4.0.1",
+diff --git a/app/src/app/(app)/AGENTS.md b/app/src/app/(app)/AGENTS.md
+index c2c7333d..c7d0da00 100644
+--- a/app/src/app/(app)/AGENTS.md
++++ b/app/src/app/(app)/AGENTS.md
+@@ -9,7 +9,7 @@
+ 
+ ## Purpose
+ 
+-Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `AppTopBar` shell. Auth enforced by layout-level `useSession()` guard — all child routes require authentication.
++Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `AppTopBar` shell. Primary auth routing is enforced by `proxy.ts` before this shell renders; server page checks are defense-in-depth.
+ 
+ ## Pointers
+ 
+@@ -35,7 +35,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
+ 
+ ## Responsibilities
+ 
+-- This directory **does**: Enforce authentication via `useSession()` redirect, render the sidebar layout shell (sidebar + top bar + content area).
++- This directory **does**: Render the sidebar layout shell (sidebar + top bar + content area) for authenticated app routes.
+ - This directory **does not**: Handle sign-in/sign-out flows, contain business logic, manage session persistence.
+ 
+ ## Usage
+@@ -47,8 +47,8 @@ pnpm build   # build for production
+ 
+ ## Standards
+ 
+-- Auth guard lives in `layout.tsx` only. Do NOT add per-page auth checks.
+-- Unauthenticated users are redirected to `/`. No auto sign-out — sign-out is an explicit user action.
++- Auth route coverage lives in `proxy.ts`. Add new protected top-level routes there before linking them in the shell.
++- Unauthenticated users are redirected to `/` before the app shell renders. No auto sign-out — sign-out is an explicit user action.
+ - Sidebar navigation links stay within `(app)` routes. The sidebar logo links to `/chat`, not `/`.
+ 
+ ## Dependencies
+diff --git a/app/src/app/(app)/knowledge/_api/fetchGraph.ts b/app/src/app/(app)/knowledge/_api/fetchGraph.ts
+new file mode 100644
+index 00000000..0198cf24
+--- /dev/null
++++ b/app/src/app/(app)/knowledge/_api/fetchGraph.ts
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@app/(app)/knowledge/_api/fetchGraph`
++ * Purpose: Client-side fetch wrapper + wire types for the knowledge graph
++ *   (nodes + citation edges). Types mirror the in-node route schema at
++ *   GET /api/v1/knowledge/graph (kept in-node, not @cogni/node-contracts, so
++ *   the graph feature stays single-node-scoped).
++ * Scope: Calls GET /api/v1/knowledge/graph with same-origin credentials.
++ * Invariants: Cookie-session only — never sends a Bearer header (per KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
++ * Side-effects: IO
++ * @internal
++ */
++
++export interface KnowledgeGraphNode {
++  id: string;
++  domain: string;
++  title: string;
++  entryType: string;
++  confidencePct: number | null;
++  sourceType: string;
++}
++
++export interface KnowledgeGraphEdge {
++  id: string;
++  source: string;
++  target: string;
++  citationType: string;
++}
++
++export interface KnowledgeGraphResponse {
++  nodes: KnowledgeGraphNode[];
++  edges: KnowledgeGraphEdge[];
++  domains: string[];
++}
++
++export async function fetchGraph(): Promise<KnowledgeGraphResponse> {
++  const response = await fetch("/api/v1/knowledge/graph", {
++    method: "GET",
++    headers: { "Content-Type": "application/json" },
++    credentials: "same-origin",
++    cache: "no-store",
++  });
++  if (!response.ok) {
++    const error = await response.json().catch(() => ({
++      error: "Failed to fetch knowledge graph",
++    }));
++    throw new Error(error.error || `HTTP ${response.status}`);
++  }
++  return response.json() as Promise<KnowledgeGraphResponse>;
++}
+diff --git a/app/src/app/(app)/knowledge/_components/ContributionActions.tsx b/app/src/app/(app)/knowledge/_components/ContributionActions.tsx
+new file mode 100644
+index 00000000..903ba00f
+--- /dev/null
++++ b/app/src/app/(app)/knowledge/_components/ContributionActions.tsx
+@@ -0,0 +1,92 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@app/(app)/knowledge/_components/ContributionActions`
++ * Purpose: Shared merge / reject action block for open knowledge contributions.
++ * Scope: Presentation + local reject-reason state only; mutations are owned by callers.
++ * @internal
++ */
++
++"use client";
++
++import type { ContributionRecord } from "@cogni/node-contracts";
++import { GitMerge, X } from "lucide-react";
++import { useState } from "react";
++
++import { Button, Input } from "@/components";
++
++interface ContributionActionsProps {
++  readonly item: ContributionRecord;
++  readonly busy: boolean;
++  readonly rejectBusy: boolean;
++  readonly onMerge: (item: ContributionRecord) => void;
++  readonly onReject: (item: ContributionRecord, reason: string) => void;
++}
++
++const REASON_MAX = 512;
++
++export function ContributionActions({
++  item,
++  busy,
++  rejectBusy,
++  onMerge,
++  onReject,
++}: ContributionActionsProps) {
++  const [rejectReason, setRejectReason] = useState("");
++
++  if (item.state !== "open") {
++    return null;
++  }
++
++  const disabled = busy || rejectBusy;
++  const trimmedReason = rejectReason.trim();
++
++  return (
++    <div className="flex flex-col gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-3">
++      <div className="flex flex-col gap-1.5">
++        <label
++          htmlFor={`reject-reason-${item.contributionId}`}
++          className="font-medium text-muted-foreground text-xs uppercase tracking-wider"
++        >
++          Reject reason
++        </label>
++        <Input
++          id={`reject-reason-${item.contributionId}`}
++          className="h-8 text-sm"
++          placeholder="Why is this contribution rejected?"
++          maxLength={REASON_MAX}
++          value={rejectReason}
++          disabled={disabled}
++          onChange={(e) => setRejectReason(e.target.value)}
++        />
++      </div>
++      <div className="flex justify-end gap-2">
++        <Button
++          type="button"
++          size="sm"
++          variant="ghost"
++          className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
++          disabled={disabled || trimmedReason === ""}
++          onClick={() => {
++            onReject(item, trimmedReason);
++            setRejectReason("");
++          }}
++        >
++          <X className="size-3.5" />
++          {rejectBusy ? "Rejecting..." : "Reject"}
++        </Button>
++        <Button
++          type="button"
++          size="sm"
++          className="h-8 gap-1.5"
++          disabled={disabled}
++          onClick={() => onMerge(item)}
++        >
++          <GitMerge className="size-3.5" />
++          {busy ? "Merging..." : "Merge to main"}
++        </Button>
++      </div>
++    </div>
++  );
++}
+diff --git a/app/src/app/(app)/knowledge/_components/ContributionDetail.tsx b/app/src/app/(app)/knowledge/_components/ContributionDetail.tsx
+index c71dc878..561bbacd 100644
+--- a/app/src/app/(app)/knowledge/_components/ContributionDetail.tsx
++++ b/app/src/app/(app)/knowledge/_components/ContributionDetail.tsx
+@@ -14,17 +14,15 @@
+ "use client";
+ 
+ import type { ContributionRecord } from "@cogni/node-contracts";
+-import { GitMerge, X } from "lucide-react";
+ import { type ReactElement, useState } from "react";
+ 
+ import {
+-  Button,
+-  Input,
+   Sheet,
+   SheetContent,
+   SheetHeader,
+   SheetTitle,
+ } from "@/components";
++import { ContributionActions } from "./ContributionActions";
+ import { ContributionDiff, diffHasHtmlEntry } from "./ContributionDiff";
+ import { CopyLinkButton } from "./CopyLinkButton";
+ import { RelativeTime } from "./RelativeTime";
+@@ -57,8 +55,6 @@ function Field({
+   );
+ }
+ 
+-const REASON_MAX = 512;
+-
+ export function ContributionDetail({
+   item,
+   open,
+@@ -68,7 +64,6 @@ export function ContributionDetail({
+   onMerge,
+   onReject,
+ }: ContributionDetailProps): ReactElement {
+-  const [rejectReason, setRejectReason] = useState("");
+   const [hasHtml, setHasHtml] = useState(false);
+ 
+   return (
+@@ -76,7 +71,6 @@ export function ContributionDetail({
+       open={open}
+       onOpenChange={(o) => {
+         if (!o) {
+-          setRejectReason("");
+           setHasHtml(false);
+         }
+         onOpenChange(o);
+@@ -124,52 +118,13 @@ export function ContributionDetail({
+             </SheetHeader>
+ 
+             <div className="mt-6 flex flex-col gap-5 px-1">
+-              {item.state === "open" && (
+-                <div className="flex flex-col gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-3">
+-                  <div className="flex flex-col gap-1.5">
+-                    <label
+-                      htmlFor="reject-reason"
+-                      className="font-medium text-muted-foreground text-xs uppercase tracking-wider"
+-                    >
+-                      Reject reason
+-                    </label>
+-                    <Input
+-                      id="reject-reason"
+-                      className="h-8 text-sm"
+-                      placeholder="Why is this contribution rejected?"
+-                      maxLength={REASON_MAX}
+-                      value={rejectReason}
+-                      disabled={busy || rejectBusy}
+-                      onChange={(e) => setRejectReason(e.target.value)}
+-                    />
+-                  </div>
+-                  <div className="flex justify-end gap-2">
+-                    <Button
+-                      type="button"
+-                      size="sm"
+-                      variant="ghost"
+-                      className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+-                      disabled={
+-                        busy || rejectBusy || rejectReason.trim() === ""
+-                      }
+-                      onClick={() => onReject(item, rejectReason.trim())}
+-                    >
+-                      <X className="size-3.5" />
+-                      {rejectBusy ? "Rejecting…" : "Reject"}
+-                    </Button>
+-                    <Button
+-                      type="button"
+-                      size="sm"
+-                      className="h-8 gap-1.5"
+-                      disabled={busy || rejectBusy}
+-                      onClick={() => onMerge(item)}
+-                    >
+-                      <GitMerge className="size-3.5" />
+-                      {busy ? "Merging…" : "Merge to main"}
+-                    </Button>
+-                  </div>
+-                </div>
+-              )}
++              <ContributionActions
++                item={item}
++                busy={busy}
++                rejectBusy={rejectBusy}
++                onMerge={onMerge}
++                onReject={onReject}
++              />
+ 
+               <Field label="Entries">
+                 <ContributionDiff
+diff --git a/app/src/app/(app)/knowledge/_components/ContributionView.tsx b/app/src/app/(app)/knowledge/_components/ContributionView.tsx
+index 840deb3f..8a58e652 100644
+--- a/app/src/app/(app)/knowledge/_components/ContributionView.tsx
++++ b/app/src/app/(app)/knowledge/_components/ContributionView.tsx
+@@ -4,25 +4,34 @@
+ /**
+  * Module: `@app/(app)/knowledge/_components/ContributionView`
+  * Purpose: Full-page view of a single contribution — the permalink target for an
+- *   inbox contribution. Renders metadata + the shared diff + a copy-link. Merge /
+- *   reject stay in the inbox review surface (`/knowledge?mode=inbox`).
+- * Scope: Presentation. Fetches the record via React Query (cookie-session).
+- * Side-effects: IO (GET /api/v1/knowledge/contributions/[id]).
++ *   inbox contribution. Renders metadata, shared diff, copy-link, and terminal
++ *   merge / reject actions for open contributions.
++ * Scope: Presentation. Fetches and mutates the record via React Query
++ *   (cookie-session).
++ * Side-effects: IO (GET /api/v1/knowledge/contributions/[id], POST merge/close).
+  * @internal
+  */
+ 
+ "use client";
+ 
+-import { useQuery } from "@tanstack/react-query";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { ArrowLeft } from "lucide-react";
+ import Link from "next/link";
++import { useState } from "react";
+ 
++import { Alert, AlertDescription } from "@/components";
++import { closeContribution } from "../_api/closeContribution";
+ import { fetchContribution } from "../_api/fetchContribution";
++import { mergeContribution } from "../_api/mergeContribution";
++import { ContributionActions } from "./ContributionActions";
+ import { ContributionDiff } from "./ContributionDiff";
+ import { CopyLinkButton } from "./CopyLinkButton";
+ import { RelativeTime } from "./RelativeTime";
+ 
+ export function ContributionView({ id }: { readonly id: string }) {
++  const queryClient = useQueryClient();
++  const [actionError, setActionError] = useState<string | null>(null);
++
+   const query = useQuery({
+     queryKey: ["knowledge", "contribution", id],
+     queryFn: () => fetchContribution(id),
+@@ -30,6 +39,28 @@ export function ContributionView({ id }: { readonly id: string }) {
+     retry: false,
+   });
+ 
++  const invalidateContribution = () => {
++    queryClient.invalidateQueries({ queryKey: ["knowledge"] });
++    queryClient.invalidateQueries({
++      queryKey: ["knowledge", "contribution", id],
++    });
++  };
++
++  const mergeMutation = useMutation({
++    mutationFn: (contributionId: string) => mergeContribution(contributionId),
++    onMutate: () => setActionError(null),
++    onSuccess: invalidateContribution,
++    onError: (error) => setActionError(errorMessage(error)),
++  });
++
++  const closeMutation = useMutation({
++    mutationFn: (vars: { contributionId: string; reason: string }) =>
++      closeContribution(vars.contributionId, vars.reason),
++    onMutate: () => setActionError(null),
++    onSuccess: invalidateContribution,
++    onError: (error) => setActionError(errorMessage(error)),
++  });
++
+   return (
+     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-5 md:p-6">
+       <Link
+@@ -87,6 +118,25 @@ export function ContributionView({ id }: { readonly id: string }) {
+             </div>
+           </div>
+ 
++          <ContributionActions
++            item={query.data}
++            busy={mergeMutation.isPending}
++            rejectBusy={closeMutation.isPending}
++            onMerge={(item) => mergeMutation.mutate(item.contributionId)}
++            onReject={(item, reason) =>
++              closeMutation.mutate({
++                contributionId: item.contributionId,
++                reason,
++              })
++            }
++          />
++
++          {actionError && (
++            <Alert variant="destructive">
++              <AlertDescription>{actionError}</AlertDescription>
++            </Alert>
++          )}
++
+           <div className="mt-2 flex flex-col gap-1">
+             <span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
+               Entries
+@@ -98,3 +148,7 @@ export function ContributionView({ id }: { readonly id: string }) {
+     </div>
+   );
+ }
++
++function errorMessage(error: unknown): string {
++  return error instanceof Error ? error.message : "Contribution action failed.";
++}
+diff --git a/app/src/app/(app)/knowledge/_components/GraphView.tsx b/app/src/app/(app)/knowledge/_components/GraphView.tsx
+new file mode 100644
+index 00000000..1a878be2
+--- /dev/null
++++ b/app/src/app/(app)/knowledge/_components/GraphView.tsx
+@@ -0,0 +1,421 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@app/(app)/knowledge/_components/GraphView`
++ * Purpose: 3D force-directed view of the knowledge hub — domains as hub nodes,
++ *   entries clustered around them, citation edges colored by type. Clicking an
++ *   entry opens the shared KnowledgeDetail side-sheet (same panel the table uses).
++ * Scope: Client presentation. Fetches GET /api/v1/knowledge/graph via React Query;
++ *   resolves clicked node → full KnowledgeRow from the parent-loaded list.
++ * Invariants:
++ *   - SSR_DISABLED (react-force-graph-3d touches window; dynamic import ssr:false).
++ *   - SIDE_SHEET_REUSE (node click → KnowledgeDetail, not a bespoke panel).
++ * Side-effects: IO (graph fetch), WebGL render.
++ * Links: docs/spec/knowledge-syntropy.md
++ * @internal
++ */
++
++"use client";
++
++import type { KnowledgeRow } from "@cogni/node-contracts";
++import { useQuery } from "@tanstack/react-query";
++import dynamic from "next/dynamic";
++import {
++  type ComponentType,
++  useCallback,
++  useEffect,
++  useMemo,
++  useRef,
++  useState,
++} from "react";
++
++import { fetchGraph } from "../_api/fetchGraph";
++import { KnowledgeDetail } from "./KnowledgeDetail";
++
++interface GraphNodeObject {
++  id: string;
++  isHub: boolean;
++  domain: string;
++  title: string;
++  entryType?: string;
++  confidencePct?: number | null;
++  sourceType?: string;
++  entryCount?: number;
++}
++
++interface GraphLinkObject {
++  source: string;
++  target: string;
++  kind: "member" | "cite";
++  citationType?: string;
++}
++
++// Only the props we use. `next/dynamic` erases the lib's own generic prop types,
++// so we re-declare them over our node/link shapes — keeps the JSX strongly typed.
++interface ForceGraph3DProps {
++  readonly graphData: {
++    nodes: GraphNodeObject[];
++    links: GraphLinkObject[];
++  };
++  readonly width?: number;
++  readonly height?: number;
++  readonly backgroundColor?: string;
++  readonly showNavInfo?: boolean;
++  readonly nodeColor?: (node: GraphNodeObject) => string;
++  readonly nodeVal?: (node: GraphNodeObject) => number;
++  readonly nodeLabel?: (node: GraphNodeObject) => string;
++  readonly nodeOpacity?: number;
++  readonly nodeResolution?: number;
++  readonly linkColor?: (link: GraphLinkObject) => string;
++  readonly linkWidth?: (link: GraphLinkObject) => number;
++  readonly linkDirectionalParticles?: (link: GraphLinkObject) => number;
++  readonly linkDirectionalParticleWidth?: number;
++  readonly linkDirectionalArrowLength?: (link: GraphLinkObject) => number;
++  readonly linkDirectionalArrowRelPos?: number;
++  readonly onNodeClick?: (node: GraphNodeObject) => void;
++}
++
++// react-force-graph-3d reaches for `window` at module load — keep it client-only.
++const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
++  ssr: false,
++  loading: () => (
++    <div className="flex h-full items-center justify-center text-muted-foreground text-xs">
++      Loading 3D engine…
++    </div>
++  ),
++}) as unknown as ComponentType<ForceGraph3DProps>;
++
++// Mirrors ChainPanel.tsx chipFor() edge semantics.
++const CITE_COLOR: Record<string, string> = {
++  supports: "#34d399",
++  validates: "#34d399",
++  evidence_for: "#7dd3fc",
++  extends: "#6ea8fe",
++  derives_from: "#6ea8fe",
++  supersedes: "#fbbf24",
++  contradicts: "#f87171",
++  invalidates: "#f87171",
++};
++
++// Confidence → hue ramp across the red→green arc of the HSL wheel:
++// hue = pct * 1.2, so 0 = red, ~30 = orange, ~50 = yellow, 100 = green.
++function confidenceColor(pct: number): string {
++  const p = Math.max(0, Math.min(100, pct));
++  return `hsl(${Math.round(p * 1.2)}, 80%, 55%)`;
++}
++
++// Domain hubs are structural anchors, not a classifier — render them neutral so
++// the entries' confidence hue is the only color signal.
++const HUB_COLOR = "#94a3b8";
++
++// nodeLabel is injected as HTML by the graph lib; knowledge titles/ids are
++// agent- and externally-authored (untrusted), so escape before interpolation.
++const HTML_ESCAPES: Record<string, string> = {
++  "&": "&amp;",
++  "<": "&lt;",
++  ">": "&gt;",
++  '"': "&quot;",
++  "'": "&#39;",
++};
++function escapeHtml(value: string): string {
++  return value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
++}
++
++type ColorMode = "confidence" | "domain";
++
++// Domain palette (Domain color mode). Operator base domains are fixed; any
++// extension domain hashes into a stable fallback hue.
++const BASE_DOMAIN_COLOR: Record<string, string> = {
++  meta: "#a78bfa",
++  nodes: "#34d399",
++  infrastructure: "#fbbf24",
++  governance: "#f472b6",
++};
++const EXTENSION_PALETTE = [
++  "#6ea8fe",
++  "#2dd4bf",
++  "#c084fc",
++  "#f97316",
++  "#22d3ee",
++  "#e879f9",
++];
++function domainColor(domain: string): string {
++  const base = BASE_DOMAIN_COLOR[domain];
++  if (base) return base;
++  let h = 0;
++  for (let i = 0; i < domain.length; i++) {
++    h = (h * 31 + domain.charCodeAt(i)) | 0;
++  }
++  return EXTENSION_PALETTE[Math.abs(h) % EXTENSION_PALETTE.length] ?? "#6ea8fe";
++}
++
++export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
++  const graphQuery = useQuery({
++    queryKey: ["knowledge", "graph"],
++    queryFn: fetchGraph,
++    staleTime: 30_000,
++  });
++
++  const [colorMode, setColorMode] = useState<ColorMode>("confidence");
++  const [showHubs, setShowHubs] = useState(true);
++  const [selectedId, setSelectedId] = useState<string | null>(null);
++
++  const rowsById = useMemo(() => {
++    const m = new Map<string, KnowledgeRow>();
++    for (const r of rows) m.set(r.id, r);
++    return m;
++  }, [rows]);
++
++  const data = useMemo<{
++    nodes: GraphNodeObject[];
++    links: GraphLinkObject[];
++  }>(() => {
++    const g = graphQuery.data;
++    if (!g) return { nodes: [], links: [] };
++    const domains = [...new Set(g.nodes.map((n) => n.domain))];
++    const hubs: GraphNodeObject[] = showHubs
++      ? domains.map((d) => ({
++          id: `domain:${d}`,
++          isHub: true,
++          domain: d,
++          title: d,
++          entryCount: g.nodes.filter((n) => n.domain === d).length,
++        }))
++      : [];
++    const entries: GraphNodeObject[] = g.nodes.map((n) => ({
++      id: n.id,
++      isHub: false,
++      domain: n.domain,
++      title: n.title,
++      entryType: n.entryType,
++      confidencePct: n.confidencePct,
++      sourceType: n.sourceType,
++    }));
++    const links: GraphLinkObject[] = [];
++    if (showHubs) {
++      for (const n of g.nodes) {
++        links.push({
++          source: `domain:${n.domain}`,
++          target: n.id,
++          kind: "member",
++        });
++      }
++    }
++    for (const e of g.edges) {
++      links.push({
++        source: e.source,
++        target: e.target,
++        kind: "cite",
++        citationType: e.citationType,
++      });
++    }
++    return { nodes: [...hubs, ...entries], links };
++  }, [graphQuery.data, showHubs]);
++
++  const nodeColor = useCallback(
++    (node: GraphNodeObject) => {
++      if (colorMode === "domain") return domainColor(node.domain);
++      if (node.isHub) return HUB_COLOR;
++      return confidenceColor(node.confidencePct ?? 40);
++    },
++    [colorMode]
++  );
++
++  const nodeVal = useCallback((node: GraphNodeObject) => {
++    if (node.isHub) return 22;
++    return 2 + (node.confidencePct ?? 40) / 22;
++  }, []);
++
++  const nodeLabel = useCallback((node: GraphNodeObject) => {
++    if (node.isHub) {
++      return `<b>${escapeHtml(node.domain)}</b> · ${node.entryCount} entries`;
++    }
++    const meta = `${escapeHtml(node.id)} · ${escapeHtml(node.entryType ?? "")} · ${node.confidencePct ?? "?"}%`;
++    return `<div style="max-width:240px"><b>${escapeHtml(node.title)}</b><br/><span style="opacity:.6">${meta}</span></div>`;
++  }, []);
++
++  const linkColor = useCallback((link: GraphLinkObject) => {
++    if (link.kind === "member") return "rgba(120,128,140,.18)";
++    return CITE_COLOR[link.citationType ?? ""] ?? "#9aa0aa";
++  }, []);
++
++  const onNodeClick = useCallback((node: GraphNodeObject) => {
++    if (node.isHub) return;
++    setSelectedId(node.id);
++  }, []);
++
++  // Size the WebGL canvas to its container (the lib defaults to window size).
++  const wrapRef = useRef<HTMLDivElement>(null);
++  const [size, setSize] = useState({ width: 800, height: 600 });
++  useEffect(() => {
++    const el = wrapRef.current;
++    if (!el) return;
++    const ro = new ResizeObserver(() => {
++      setSize({ width: el.clientWidth, height: el.clientHeight });
++    });
++    ro.observe(el);
++    setSize({ width: el.clientWidth, height: el.clientHeight });
++    return () => ro.disconnect();
++  }, []);
++
++  const selectedItem = selectedId ? (rowsById.get(selectedId) ?? null) : null;
++
++  if (graphQuery.error) {
++    return (
++      <p className="py-8 text-center text-destructive">
++        Failed to load knowledge graph.
++      </p>
++    );
++  }
++
++  return (
++    <>
++      <div className="flex flex-wrap items-center gap-3">
++        <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
++          {(["confidence", "domain"] as const).map((m) => (
++            <button
++              key={m}
++              type="button"
++              onClick={() => setColorMode(m)}
++              className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
++                colorMode === m
++                  ? "bg-background font-medium text-foreground shadow-sm"
++                  : "text-muted-foreground hover:text-foreground"
++              }`}
++            >
++              {m}
++            </button>
++          ))}
++        </div>
++        <label className="flex cursor-pointer items-center gap-2 text-muted-foreground text-xs">
++          <input
++            type="checkbox"
++            checked={showHubs}
++            onChange={(e) => setShowHubs(e.target.checked)}
++            className="size-3.5 accent-primary"
++          />
++          Domain hubs
++        </label>
++      </div>
++
++      <div
++        ref={wrapRef}
++        className="relative h-[var(--height-knowledge-graph)] w-full overflow-hidden rounded-lg border border-border/60 bg-background"
++      >
++        {graphQuery.data && (
++          <ForceGraph3D
++            graphData={data}
++            width={size.width}
++            height={size.height}
++            backgroundColor="rgba(0,0,0,0)"
++            showNavInfo={false}
++            nodeColor={nodeColor}
++            nodeVal={nodeVal}
++            nodeLabel={nodeLabel}
++            nodeOpacity={0.92}
++            nodeResolution={12}
++            linkColor={linkColor}
++            linkWidth={(l: GraphLinkObject) => (l.kind === "cite" ? 1.2 : 0.4)}
++            linkDirectionalParticles={(l: GraphLinkObject) =>
++              l.kind === "cite" ? 2 : 0
++            }
++            linkDirectionalParticleWidth={1.4}
++            linkDirectionalArrowLength={(l: GraphLinkObject) =>
++              l.kind === "cite" ? 2.5 : 0
++            }
++            linkDirectionalArrowRelPos={1}
++            onNodeClick={onNodeClick}
++          />
++        )}
++        <GraphLegend
++          colorMode={colorMode}
++          edges={graphQuery.data?.edges ?? []}
++          domains={graphQuery.data?.domains ?? []}
++        />
++      </div>
++
++      <KnowledgeDetail
++        item={selectedItem}
++        open={selectedItem !== null}
++        showChain
++        onOpenChange={(o) => {
++          if (!o) setSelectedId(null);
++        }}
++      />
++    </>
++  );
++}
++
++const SECTION_CLASS =
++  "mb-1.5 font-medium text-[var(--text-knowledge-graph-section)] text-muted-foreground uppercase tracking-wider";
++
++function GraphLegend({
++  colorMode,
++  edges,
++  domains,
++}: {
++  readonly colorMode: ColorMode;
++  readonly edges: ReadonlyArray<{ citationType: string }>;
++  readonly domains: ReadonlyArray<string>;
++}) {
++  const citeTypes = [...new Set(edges.map((e) => e.citationType))];
++  const ramp = [0, 25, 50, 75, 100];
++  return (
++    <div className="absolute bottom-3 left-3 w-[var(--width-knowledge-graph-legend)] rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
++      <p className="mb-2.5 font-medium text-[var(--text-knowledge-graph-stat)] text-foreground tabular-nums">
++        {edges.length} citation{edges.length === 1 ? "" : "s"} ·{" "}
++        {domains.length} domain{domains.length === 1 ? "" : "s"}
++      </p>
++
++      {colorMode === "confidence" ? (
++        <>
++          <p className={SECTION_CLASS}>Confidence</p>
++          <div className="flex items-center gap-2 text-muted-foreground text-xs">
++            <span>0</span>
++            <span className="flex">
++              {ramp.map((p) => (
++                <span
++                  key={p}
++                  className="size-2.5"
++                  style={{ backgroundColor: confidenceColor(p) }}
++                />
++              ))}
++            </span>
++            <span>100</span>
++          </div>
++        </>
++      ) : (
++        <>
++          <p className={SECTION_CLASS}>Domains</p>
++          {domains.slice(0, 8).map((d) => (
++            <div key={d} className="flex items-center gap-2 text-xs">
++              <span
++                className="size-2.5 rounded-full"
++                style={{ backgroundColor: domainColor(d) }}
++              />
++              {d}
++            </div>
++          ))}
++        </>
++      )}
++
++      <p className={`${SECTION_CLASS} mt-2.5`}>Links · citations</p>
++      {citeTypes.length > 0 ? (
++        citeTypes.slice(0, 8).map((ct) => (
++          <div key={ct} className="flex items-center gap-2 text-xs">
++            <span
++              className="h-0 w-4 border-t-2"
++              style={{ borderColor: CITE_COLOR[ct] ?? "#9aa0aa" }}
++            />
++            {ct}
++          </div>
++        ))
++      ) : (
++        <span className="text-muted-foreground text-xs">
++          none yet — agents cite as they learn
++        </span>
++      )}
++    </div>
++  );
++}
+diff --git a/app/src/app/(app)/knowledge/view.tsx b/app/src/app/(app)/knowledge/view.tsx
+index 3c18b872..f710df49 100644
+--- a/app/src/app/(app)/knowledge/view.tsx
++++ b/app/src/app/(app)/knowledge/view.tsx
+@@ -48,6 +48,7 @@ import {
+   GitBranch,
+   GitMerge,
+   Library,
++  Network,
+   Plus,
+   Settings2,
+   Tags,
+@@ -67,9 +68,10 @@ import { ContributionDetail } from "./_components/ContributionDetail";
+ import { knowledgeColumns } from "./_components/columns";
+ import { buildContributionColumns } from "./_components/contribution-columns";
+ import { domainColumns } from "./_components/domain-columns";
++import { GraphView } from "./_components/GraphView";
+ import { KnowledgeDetail } from "./_components/KnowledgeDetail";
+ 
+-type ViewMode = "browse" | "domains" | "inbox" | "chains";
++type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph";
+ 
+ const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
+   "hypothesis",
+@@ -79,7 +81,13 @@ const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
+ ]);
+ 
+ function isMode(v: string | null): v is ViewMode {
+-  return v === "browse" || v === "domains" || v === "inbox" || v === "chains";
++  return (
++    v === "browse" ||
++    v === "domains" ||
++    v === "inbox" ||
++    v === "chains" ||
++    v === "graph"
++  );
+ }
+ 
+ export function KnowledgeDashboardView() {
+@@ -174,6 +182,12 @@ export function KnowledgeDashboardView() {
+               label="Browse"
+               icon={<Library className="size-3.5" />}
+             />
++            <ModeButton
++              active={mode === "graph"}
++              onClick={() => setModeUrl("graph")}
++              label="Graph"
++              icon={<Network className="size-3.5" />}
++            />
+             <ModeButton
+               active={mode === "chains"}
+               onClick={() => setModeUrl("chains")}
+@@ -215,6 +229,7 @@ export function KnowledgeDashboardView() {
+           mode="chains"
+         />
+       )}
++      {mode === "graph" && <GraphView rows={knowledgeQuery.data?.items ?? []} />}
+       {mode === "domains" && (
+         <DomainsPanel
+           rows={domainsQuery.data?.domains ?? []}
+diff --git a/app/src/app/AGENTS.md b/app/src/app/AGENTS.md
+index 874168ea..e5583c13 100644
+--- a/app/src/app/AGENTS.md
++++ b/app/src/app/AGENTS.md
+@@ -87,7 +87,7 @@ pnpm build   # build for production
+ ## Route Group Conventions
+ 
+ - **`(public)/*`**: Unauthenticated UI pages. No auth guard. Landing page, marketing, docs.
+-- **`(app)/*`**: Protected UI pages. Auth enforced by `(app)/layout.tsx` using client-side `useSession()` redirect. All pages under `(app)` automatically require authentication. Do NOT add per-page auth checks.
++- **`(app)/*`**: Protected UI pages. Primary auth routing is enforced by `proxy.ts` before the app shell renders; server page checks may remain as defense-in-depth. Do NOT add client-side auth redirects.
+ - **`(admin)/*`**: DAO-admin pages. Login gate via `proxy.ts` matcher; role gate via server-side `(admin)/layout.tsx` checking the SIWE wallet against `getLedgerApprovers()` (repo-spec `activity_ledger.approvers`). Non-approvers redirect to `/dashboard`. See `(admin)/AGENTS.md`.
+ - **`(infra)/*`**: Infrastructure endpoints. Explicitly unauthenticated. Health checks, meta, OpenAPI specs.
+ - **`api/*`**: JSON APIs. Keep under `api/v1/**` for versioned endpoints. Auth enforced per-route using `auth()` calls in route handlers (not via layout).
+diff --git a/app/src/app/api/v1/knowledge/graph/route.ts b/app/src/app/api/v1/knowledge/graph/route.ts
+new file mode 100644
+index 00000000..789b6b72
+--- /dev/null
++++ b/app/src/app/api/v1/knowledge/graph/route.ts
+@@ -0,0 +1,126 @@
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@app/api/v1/knowledge/graph/route`
++ * Purpose: GET /api/v1/knowledge/graph — full node (entry) + edge (citation) set
++ *   for the 3D knowledge graph view. Reads every domain's entries plus each
++ *   entry's outgoing citations via container.knowledgeStorePort.
++ * Scope: Cookie-session only (Bearer agents rejected 403, like /knowledge).
++ *   Edges gathered from per-node outgoing citations — every citation has exactly
++ *   one citing node in the set, so this yields the complete edge list.
++ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION,
++ *   EDGE_ENDPOINTS_EXIST (edges whose cited target isn't in the node set are dropped).
++ * Side-effects: IO (HTTP response, Doltgres reads via container port)
++ * Links: docs/spec/knowledge-syntropy.md
++ * @public
++ */
++
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import { getSessionUser } from "@/app/_lib/auth/session";
++import { getContainer } from "@/bootstrap/container";
++import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
++
++export const dynamic = "force-dynamic";
++export const runtime = "nodejs";
++
++// Graph contract lives in-node (not @cogni/node-contracts) to keep this PR
++// single-node-scoped. The client mirrors this shape in `_api/fetchGraph.ts`.
++const GraphNodeSchema = z.object({
++  id: z.string(),
++  domain: z.string(),
++  title: z.string(),
++  entryType: z.string(),
++  confidencePct: z.number().int().nullable(),
++  sourceType: z.string(),
++});
++const GraphEdgeSchema = z.object({
++  id: z.string(),
++  source: z.string(),
++  target: z.string(),
++  citationType: z.string(),
++});
++const GraphResponseSchema = z.object({
++  nodes: z.array(GraphNodeSchema),
++  edges: z.array(GraphEdgeSchema),
++  domains: z.array(z.string()),
++});
++
++export const GET = wrapRouteHandlerWithLogging(
++  {
++    routeId: "knowledge.graph",
++    auth: { mode: "required", getSessionUser },
++  },
++  async (ctx, request, sessionUser) => {
++    if (!sessionUser) {
++      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
++    }
++    // Mirror /api/v1/knowledge: Bearer agents must not browse the knowledge
++    // plane in v0 (KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
++    const authz = request.headers.get("authorization") ?? "";
++    if (authz.toLowerCase().startsWith("bearer ")) {
++      return NextResponse.json(
++        { error: "knowledge graph requires a session cookie (v0)" },
++        { status: 403 }
++      );
++    }
++
++    const port = getContainer().knowledgeStorePort;
++    if (!port) {
++      return NextResponse.json(
++        { error: "knowledge store not configured" },
++        { status: 503 }
++      );
++    }
++
++    const domains = await port.listDomains();
++    const nodes: z.infer<typeof GraphNodeSchema>[] = [];
++    const nodeIds = new Set<string>();
++    const entryIds: string[] = [];
++    for (const domain of domains) {
++      const rows = await port.listKnowledge(domain, { limit: 10_000 });
++      for (const r of rows) {
++        nodeIds.add(r.id);
++        entryIds.push(r.id);
++        nodes.push({
++          id: r.id,
++          domain: r.domain,
++          title: r.title,
++          entryType: r.entryType ?? "finding",
++          confidencePct: r.confidencePct ?? null,
++          sourceType: r.sourceType,
++        });
++      }
++    }
++
++    // Every citation has exactly one citing node (which is in our set), so
++    // gathering each node's outgoing edges yields the full edge list. Drop
++    // edges whose cited target isn't a node (deprecated/cross-domain dangling
++    // refs) so the client never renders a floating edge.
++    const edgeLists = await Promise.all(
++      entryIds.map((id) => port.listCitationsByCitingId(id))
++    );
++    const edges: z.infer<typeof GraphEdgeSchema>[] = [];
++    for (const list of edgeLists) {
++      for (const c of list) {
++        if (!nodeIds.has(c.citedId)) continue;
++        edges.push({
++          id: c.id,
++          source: c.citingId,
++          target: c.citedId,
++          citationType: c.citationType,
++        });
++      }
++    }
++
++    ctx.log.info(
++      { nodes: nodes.length, edges: edges.length, domains: domains.length },
++      "knowledge.graph_success"
++    );
++
++    return NextResponse.json(
++      GraphResponseSchema.parse({ nodes, edges, domains })
++    );
++  }
++);
+diff --git a/app/src/proxy.ts b/app/src/proxy.ts
+index e781d9af..ee41ca21 100644
+--- a/app/src/proxy.ts
++++ b/app/src/proxy.ts
+@@ -26,9 +26,11 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+ /** App routes that require authentication — unauthenticated visitors are redirected to /. */
+ const APP_ROUTES = [
+ 	"/chat",
++	"/dashboard",
+ 	"/profile",
+ 	"/credits",
+ 	"/gov",
++	"/knowledge",
+ 	"/schedules",
+ 	"/setup",
+ 	"/work",
+@@ -183,9 +185,11 @@ export const config = {
+ 	matcher: [
+ 		"/",
+ 		"/chat/:path*",
++		"/dashboard/:path*",
+ 		"/profile/:path*",
+ 		"/credits/:path*",
+ 		"/gov/:path*",
++		"/knowledge/:path*",
+ 		"/schedules/:path*",
+ 		"/setup/:path*",
+ 		"/work/:path*",
+diff --git a/app/src/styles/tailwind.css b/app/src/styles/tailwind.css
+index f31667f6..96200aac 100644
+--- a/app/src/styles/tailwind.css
++++ b/app/src/styles/tailwind.css
+@@ -84,6 +84,12 @@
+   --max-height-dialog: 80vh;
+   --max-height-dialog-mobile: 70vh;
+ 
++  /* Knowledge graph sizing */
++  --height-knowledge-graph: 70vh;
++  --width-knowledge-graph-legend: 13rem;
++  --text-knowledge-graph-section: 0.625rem;
++  --text-knowledge-graph-stat: 0.6875rem;
++
+   /* Positioning - centering transforms */
+   --center-50: 50%;
+   --center-neg-50: -50%;
+diff --git a/app/tests/unit/auth/proxy-routing.test.ts b/app/tests/unit/auth/proxy-routing.test.ts
+index ec500375..be737e09 100644
+--- a/app/tests/unit/auth/proxy-routing.test.ts
++++ b/app/tests/unit/auth/proxy-routing.test.ts
+@@ -100,6 +100,24 @@ describe("proxy — page-level routing", () => {
+ 		expectRedirectTo(res, "/");
+ 	});
+ 
++	it("redirects unauthenticated user on /dashboard to /", async () => {
++		mockGetToken.mockResolvedValue(null);
++
++		const res = await proxy(makeRequest("/dashboard"));
++
++		expectRedirectTo(res, "/");
++	});
++
++	it("redirects unauthenticated user on /knowledge inbox permalink to /", async () => {
++		mockGetToken.mockResolvedValue(null);
++
++		const res = await proxy(
++			makeRequest("/knowledge/inbox/contrib-example-123"),
++		);
++
++		expectRedirectTo(res, "/");
++	});
++
+ 	it("redirects unauthenticated user on /chat/some-id to /", async () => {
+ 		mockGetToken.mockResolvedValue(null);
+ 
+diff --git a/docs/guides/add-secret.md b/docs/guides/add-secret.md
+index 36d657ee..562b165a 100644
+--- a/docs/guides/add-secret.md
++++ b/docs/guides/add-secret.md
+@@ -2,13 +2,13 @@
+ id: guide.add-secret
+ type: guide
+ title: Add a Node Secret
+-status: draft
+-trust: draft
++status: active
++trust: reviewed
+ summary: Node-repo half of adding a node-specific secret without touching operator deploy plumbing.
+ read_when: Adding a credential or API key that this node's app code consumes.
+ owner: derekg1729
+ created: 2026-06-05
+-verified: null
++verified: 2026-06-18
+ tags: [secrets, nodes]
+ ---
+ 
+@@ -51,9 +51,11 @@ Do not log secret values, request headers, tokens, cookies, or full vendor paylo
+ 
+ The value never enters git, PR comments, chat, or committed YAML. Two paths write it to OpenBao:
+ 
+-**Self-serve via the operator (you, the node owner — recommended).** Granted OpenFGA
+-`secrets_manager` on this node, you set the value through the operator with only your
+-**API key** — no kubeconfig, no OpenBao writer token:
++**Self-serve via the operator (you, the node owner — the default, agent-friendly path).**
++First, an owner grants you OpenFGA `secrets_manager` on this node (operator Agents UI →
++"Manage secrets" — a distinct, least-privilege grant, not bundled with "Flight"). Then you
++set the value through the operator with only your **API key** — no kubeconfig, no OpenBao
++writer token:
+ 
+ ```
+ POST https://<operator-host>/api/v1/nodes/<node-id>/secrets
+@@ -65,11 +67,34 @@ content-type: application/json
+ → 200 { "written": true, "version": <n>, "path": "cogni/<env>/<node>/MY_NEW_KEY" }
+ ```
+ 
+-The operator authorizes the write per-node (`can_manage_secrets`), confirms `MY_NEW_KEY`
+-is declared in this node's catalog (step 1), and writes it with its **own** in-cluster
+-OpenBao identity — your key never carries cluster custody. ESO + Stakater Reloader then
+-carry the value into the running pod. Confirm with the `version` in the response (no
+-`kubectl` needed).
++The operator authorizes the write **per-node** (`can_manage_secrets`, fail-closed), refuses
++**reserved substrate keys** (your node owns its own namespace — any non-reserved key is
++allowed; the catalog in step 1 is for typed consumption + shape, **not** a write gate), and
++writes with its **own** in-cluster OpenBao identity — your key never carries cluster custody.
++ESO + Stakater Reloader then carry the value into the running pod. Confirm with the `version`
++in the response (no `kubectl` needed).
++
++### Holding `secrets_manager` is safe — it's authority, not custody
++
++This is the error to avoid: thinking the grant gives you operator-level / cluster
++power and declining it. It does not. `secrets_manager` is the secrets twin of
++`developer`/`production_promoter` — **per-node, least-privilege.** Two separate things:
++
++| | **You** (grant holder = authority) | **The operator** (mediator = custody) |
++| --- | --- | --- |
++| hold | only an API key | the OpenBao writer identity (projected SA token, kube) |
++| reach | **only `cogni/<env>/<your-node>/*`** | mediates the write; enforces the gates |
++| see | the `version` you wrote | never hands you a value; other nodes are invisible to you |
++
++So **request it for your node.** You never receive the writer token, a kubeconfig,
++cross-node reach, or any value but your own — the operator *mediates* the write, which
++is not the same as you holding operator power. Declining the grant and asking an operator
++to "just run it for me" is the **legacy admin path being retired** — it re-inserts a
++privileged human into every secret write and forfeits your node's self-sovereignty.
++
++> **`503 secrets_plane_config_missing`?** This env's operator doesn't have the secrets-writer
++> identity provisioned yet. candidate-a is live; preview/production roll out with the operator
++> deploy — ping the operator team rather than reaching for the CLI.
+ 
+ **Ops / deploy-env owner (fallback).** Whoever holds the env's OpenBao writer role can
+ also write it directly:
+diff --git a/docs/guides/candidate-auth-bootstrap.md b/docs/guides/candidate-auth-bootstrap.md
+new file mode 100644
+index 00000000..c5b28a1f
+--- /dev/null
++++ b/docs/guides/candidate-auth-bootstrap.md
+@@ -0,0 +1,163 @@
++---
++id: guide.candidate-auth-bootstrap
++type: guide
++title: Candidate Auth Bootstrap — Authed Playwright via CDP Attach
++status: draft
++trust: draft
++summary: Capture a reusable signed-in browser session for this node's candidate-a env via a dedicated Chrome profile + MetaMask + CDP-attach export, so AI agents can drive authed Playwright flows without re-prompting signin.
++read_when: Setting up the candidate-auth Chrome profile, capturing a new env's storageState, or troubleshooting why a captured session no longer authenticates
++owner: derekg1729
++created: 2026-06-18
++verified: null
++tags: [auth, playwright, candidate-a, validate, metamask]
++---
++
++# Candidate Auth Bootstrap — Authed Playwright via CDP Attach
++
++> Goal: capture a reusable signed-in browser session for `<node>-test.cognidao.org` (this node's candidate-a env) so AI agents (Claude, qa-agent) can drive authed Playwright flows without re-prompting MetaMask on every run.
++>
++> Human effort: one-time MetaMask install into a dedicated Chrome profile (~2 min), then 1–2 clicks to sign in per env. Recapture when the session cookie expires (days–weeks).
++
++## Why this exists
++
++Playwright launches a fresh Chromium profile with no extensions — MetaMask and other wallet extensions therefore do not work in the normal `browser.newContext()` flow. Work around it by launching **a dedicated Chrome profile** (with MetaMask installed), signing in once, then exporting the resulting session cookies via CDP attach. Future Playwright runs load the exported `storageState.json` and are authenticated without needing a wallet at all.
++
++The session cookie is the auth artifact. MetaMask only participates in the _first_ signin to mint the cookie.
++
++## Why a dedicated profile (not your default Chrome)
++
++Chrome 136+ **disables** `--remote-debugging-port` when launched against the default user data dir, as a security mitigation (default profile cookies are an attractive target for malware using CDP). A dedicated profile dir bypasses this cleanly. One-time MetaMask install into the new profile is the only setup cost.
++
++## Storage layout (in repo, gitignored)
++
++```
++.local-auth/
++  chrome-profile/                          # dedicated Chrome user data dir (MetaMask lives here)
++  credentials.md                           # MetaMask password + recovery phrase (test wallet only)
++  candidate-a-<node>.storageState.json     # <node>-test.cognidao.org
++  ...
++```
++
++`.local-auth` lives in the node's **main workspace checkout**; Conductor worktree spawns symlink it in via `scripts/conductor-worktree-setup.sh`. Root `.gitignore` excludes the entire `.local-auth` directory. Never commit — these files hold live session cookies, and the profile dir holds the MetaMask vault.
++
++> **Future state:** this whole stack is a crawl-step MVP wedge. Long-term it should be:
++>
++> - test wallet seed in a secrets manager (1Password CLI / Doppler), not a gitignored markdown file
++> - Chrome profile under `~/.cogni-auth/chrome-profile/` (or OS-equivalent), not in-repo (profile is hundreds of MB and shared across worktrees)
++> - first-class commands `pnpm auth:capture <env>` + `pnpm auth:verify <env>` driven by the node × env matrix
++
++## One-time setup (per laptop)
++
++1. **Quit all Chrome windows** (⌘Q). Verify nothing is running: `pgrep -lf "Google Chrome"` should be empty.
++2. Launch Chrome pointed at the dedicated profile, with CDP enabled:
++
++   ```bash
++   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
++     --remote-debugging-port=9222 \
++     --user-data-dir="$PWD/.local-auth/chrome-profile"
++   ```
++
++   Keep that terminal tab open — closing it kills Chrome.
++
++3. **Install MetaMask** into this profile:
++   - **Skip / reject every Google sign-in prompt.** Don't sign into Chrome with a Google account, don't enable sync, dismiss any "Turn on sync" banners. This profile is a throwaway test rig — signing in pollutes it with your real identity and defeats the isolation.
++   - Go to `https://chrome.google.com/webstore/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn`
++   - Click "Add to Chrome"
++   - MetaMask setup: choose **Create a new wallet** (preferred) or **Import existing** if you already have a dedicated test seed.
++   - **Suggested password:** `cogni-is-the-goat` (low-stakes — this profile is test-only and gitignored). If you pick something else, write it down in `.local-auth/credentials.md` so the next agent/session can unlock.
++   - Finish setup. MetaMask shows you a 12-word recovery phrase — **save it into `.local-auth/credentials.md` immediately**. That file is gitignored. Without it, a wiped profile means a lost wallet.
++   - **Seed confirmation step:** MetaMask then asks the user to fill in 3 specific word positions (e.g. "2, 5, 8") from a shuffled word pool. The AI agent should read `.local-auth/credentials.md`, map the requested positions to the saved phrase, and tell the user exactly which word goes in each slot. Don't make the user count words manually.
++   - Unlock MetaMask.
++
++4. Verify CDP is listening:
++
++   ```bash
++   curl -s http://localhost:9222/json/version | jq .Browser
++   # -> "Chrome/<version>"
++   ```
++
++The profile now persists under `.local-auth/chrome-profile/`. Future launches reuse it — MetaMask stays installed, stays funded with whatever account you imported.
++
++## Per-environment: sign in and capture
++
++1. In the debuggable Chrome, navigate to the target env (e.g. `https://<node>-test.cognidao.org`).
++2. Sign-in is typically **2 MetaMask prompts** (up to 4 clicks total):
++   - Click "Sign in" / "Connect wallet"
++   - MetaMask **Connect** popup → approve the connection
++   - Site then issues a SIWE message
++   - MetaMask **Sign** popup → sign the message
++3. Confirm you're signed in (avatar/account visible, or redirect to an authed page).
++4. **Leave that tab open**, then from the repo root:
++
++   ```bash
++   node scripts/dev/capture-authed-state.mjs candidate-a-<node> https://<node>-test.cognidao.org
++   ```
++
++   Writes `.local-auth/candidate-a-<node>.storageState.json` and prints cookie/domain counts as sanity check.
++
++   > Requires `@playwright/test` (a devDependency of this repo) — the script attaches to your already-running Chrome over CDP, so no `playwright install` browser download is needed.
++
++## Using captured state
++
++Two valid consumers:
++
++**1. Ad-hoc / `/validate-candidate` skill — `playwright-cli`** (preferred for one-off validation runs):
++
++```bash
++playwright-cli -s=validate state-load .local-auth/candidate-a-<node>.storageState.json
++playwright-cli -s=validate open https://<node>-test.cognidao.org
++playwright-cli -s=validate snapshot
++playwright-cli -s=validate close
++```
++
++**2. Committed Playwright test files — `@playwright/test`** (for code that lives in the repo and runs in CI):
++
++```ts
++import { chromium } from "@playwright/test";
++import path from "node:path";
++
++const storageState = path.join(
++  process.cwd(),
++  ".local-auth/candidate-a-<node>.storageState.json"
++);
++
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ storageState });
++const page = await ctx.newPage();
++await page.goto("https://<node>-test.cognidao.org");
++// already signed in — no MetaMask needed
++```
++
++The two paths read the **same JSON schema** — `playwright-cli state-save` and `@playwright/test` `storageState` are interchangeable. Pick by context: validation runs use the CLI (zero artifacts, snapshot-driven); committed tests use the library API.
++
++## Refresh cadence
++
++- Sessions generally persist for days to weeks depending on the env's cookie TTL.
++- When an agent run hits "unauthenticated", re-run the sign-in + capture flow. MetaMask is only needed to re-mint the cookie.
++- Clearing `.local-auth/chrome-profile/` wipes MetaMask — you'd have to re-import the seed phrase.
++
++## Troubleshooting
++
++- **`curl localhost:9222` refused but Chrome is running:** you pointed `--user-data-dir` at the default profile. Chrome 136+ blocks CDP there. Use `.local-auth/chrome-profile/` as shown.
++- **Still refused with dedicated profile:** another Chrome instance is holding the profile lock. Run `pgrep -lf "Google Chrome"`, kill stragglers, retry.
++- **MetaMask popup doesn't appear on signin:** unlock the extension (click the fox icon, enter password). Extensions stay locked across Chrome restarts.
++- **Captured state has no cookies for the expected domain:** you signed in before the capture script could see the tab. Make sure the tab is still open at the target URL when you run the script.
++- **Playwright runs but site redirects to signin:** cookie expired — recapture. _Or:_ the site stores auth in `localStorage` rather than cookies, and CDP-attach export reports `origins: 0`. In that case the captured `storageState.json` is insufficient; a dedicated Playwright authfile step (using `browser.newContext({ storageState })` against a Playwright-launched browser + manual signin inside Playwright) may be needed. Tracked as a known gap — update this guide when resolved.
++
++## Done for the session — getting back to your normal browser
++
++When you're finished capturing state:
++
++1. **Fully quit** the debuggable Chrome window: ⌘Q inside that window (closing via the red dot does not quit the process). The agent can also kill it by PID: `pgrep -f "remote-debugging-port" | xargs kill`.
++2. Open Chrome normally from Applications / Spotlight / Dock — it launches with your real default profile (bookmarks, extensions, history all there).
++
++Notes:
++
++- The macOS "default browser" setting is **app-level**, not profile-level. If macOS prompted "Make Chrome your default browser" when the debug profile launched, nothing meaningful changed — Chrome-the-app is still the default either way.
++- You **can run both at once**: the debug profile and your normal profile coexist as separate Chrome processes because they point at different `--user-data-dir`s. Launch one with the debug flag + `.local-auth/chrome-profile/`, open the other from the Dock. The only conflict is two processes sharing one profile dir (Chrome refuses that with a lock-file error). When both are running, macOS may open new-window link clicks in whichever Chrome launched most recently — keep that in mind while automating.
++
++## Scope / non-goals
++
++- Per-developer primitive. Multi-tenant / credential-broker flows for production agents are tracked separately.
++- No headless capture — signin is inherently interactive.
++- Not for CI — CI uses API-key or service-account auth, not SIWE.
+diff --git a/package.json b/package.json
+index db0888eb..49330fa3 100644
+--- a/package.json
++++ b/package.json
+@@ -30,6 +30,7 @@
+     }
+   },
+   "devDependencies": {
++    "@playwright/test": "^1.56.1",
+     "@types/node": "^22",
+     "drizzle-kit": "^0.31.7",
+     "tsx": "^4.20.6",
+diff --git a/packages/knowledge-base/src/schema.ts b/packages/knowledge-base/src/schema.ts
+index fbe0a29e..60fd7610 100644
+--- a/packages/knowledge-base/src/schema.ts
++++ b/packages/knowledge-base/src/schema.ts
+@@ -13,7 +13,7 @@
+  *   - DOLT_IS_SOURCE_OF_TRUTH (knowledge-syntropy): all knowledge data lives here. Postgres search index is derived and rebuildable.
+  *   - ENTRY_HAS_PROVENANCE: every `knowledge` row has `source_type` + `source_ref`.
+  *   - ENTRY_HAS_DOMAIN: every `knowledge` row's `domain` matches a registered row in `domains`.
+- *   - DEPRECATE_NOT_DELETE: superseded entries get `status='deprecated'` + a `citations` row of type `supersedes`. Never DELETE.
++ *   - DELETE_IS_CLEAN: dead/retired knowledge is DELETEd (Dolt history preserves content + commits + attribution); supersession is refine-in-place. `status='deprecated'` retained only for the EDO temporal hypothesis lifecycle.
+  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
+  *   - No FK references to Postgres tables (different database server).
+  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
+diff --git a/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts b/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+index 82d0aea0..7131f913 100644
+--- a/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
++++ b/packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+@@ -452,10 +452,32 @@ async function applyEdit(input: {
+   const { conn, mainSql, contributionId, principal, seq, edit } = input;
+   const ref = sourceRef(contributionId, seq);
+   const sourceNode = principal.id;
+-  if (edit.op === "deprecate") {
++  if (edit.op === "delete") {
++    // DELETE_IS_CLEAN: dead knowledge is removed from the live table, not
++    // soft-flagged. Dolt's version history preserves the row's content, every
++    // commit, and the contributor chain — the log IS the tombstone (audit +
++    // attribution survive). The delete itself is attributed via the
++    // surrounding contribution commit (principal + source_ref).
+     await assertKnowledgeRowExists(conn, edit.targetRowId);
++    // DAG safety: refuse if a live row cites this one — deleting would dangle
++    // that inbound edge. Repoint/remove those citations first, or refine the
++    // target in place instead of deleting.
++    const inbound = (await conn.unsafe(
++      `SELECT citing_id FROM citations WHERE cited_id = ${escapeValue(edit.targetRowId)} LIMIT 5`
++    )) as Array<{ citing_id: string }>;
++    if (inbound.length > 0) {
++      const citers = inbound.map((r) => r.citing_id).join(", ");
++      throw new ContributionConflictError(
++        `cannot delete '${edit.targetRowId}': cited by ${citers}. Remove or repoint those edges first, or refine the entry in place.`
++      );
++    }
++    // Cascade the dead entry's OWN outbound edges (its claims about others),
++    // then the row. Inbound is guaranteed empty by the guard above.
++    await conn.unsafe(
++      `DELETE FROM citations WHERE citing_id = ${escapeValue(edit.targetRowId)}`
++    );
+     await conn.unsafe(
+-      `UPDATE knowledge SET status = ${escapeValue("deprecated")}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
++      `DELETE FROM knowledge WHERE id = ${escapeValue(edit.targetRowId)}`
+     );
+     return;
+   }
+diff --git a/packages/knowledge-store/src/domain/contribution-schemas.ts b/packages/knowledge-store/src/domain/contribution-schemas.ts
+index 29a266a7..7b118cbb 100644
+--- a/packages/knowledge-store/src/domain/contribution-schemas.ts
++++ b/packages/knowledge-store/src/domain/contribution-schemas.ts
+@@ -65,7 +65,7 @@ export const KnowledgeContributionEditSchema = z
+       entry: KnowledgeEntryInputSchema,
+     }),
+     z.object({
+-      op: z.literal("deprecate"),
++      op: z.literal("delete"),
+       targetRowId: z.string().min(1).max(256),
+       reason: z.string().min(1).max(512),
+     }),
+diff --git a/packages/knowledge-store/src/port/knowledge-store.port.ts b/packages/knowledge-store/src/port/knowledge-store.port.ts
+index 54f7ffe5..2786e96d 100644
+--- a/packages/knowledge-store/src/port/knowledge-store.port.ts
++++ b/packages/knowledge-store/src/port/knowledge-store.port.ts
+@@ -178,7 +178,12 @@ export interface KnowledgeStorePort {
+     id: string,
+     update: Partial<NewKnowledge>
+   ): Promise<Knowledge>;
+-  /** Admin/cleanup only; agents use DEPRECATE_NOT_DELETE. */
++  /**
++   * Hard-delete a row. DELETE_IS_CLEAN — dead knowledge leaves the live table;
++   * Dolt version history preserves content + commits + contributor chain. The
++   * contribution `delete` op is the attributed agent path; this is the raw
++   * primitive. Callers must clear inbound citations first (else the DAG dangles).
++   */
+   deleteKnowledge(id: string): Promise<void>;
+ 
+   // --- Read — knowledge identity (knowledge-syntropy: CITATION_TARGET_EXISTS_AT_WRITE) ---
+diff --git a/packages/knowledge-store/src/service/contribution-service.ts b/packages/knowledge-store/src/service/contribution-service.ts
+index baecf085..1a561a0a 100644
+--- a/packages/knowledge-store/src/service/contribution-service.ts
++++ b/packages/knowledge-store/src/service/contribution-service.ts
+@@ -154,7 +154,7 @@ export function createContributionService(
+     for (const edit of edits) {
+       // deprecate + cite carry no knowledge-entry content to gate — a cite is
+       // a typed edge between existing rows. Pass them through untouched.
+-      if (edit.op === "deprecate" || edit.op === "cite") {
++      if (edit.op === "delete" || edit.op === "cite") {
+         out.push(edit);
+         continue;
+       }
+diff --git a/packages/knowledge-store/tests/contribution-service.test.ts b/packages/knowledge-store/tests/contribution-service.test.ts
+index 004b4f18..8acc3e71 100644
+--- a/packages/knowledge-store/tests/contribution-service.test.ts
++++ b/packages/knowledge-store/tests/contribution-service.test.ts
+@@ -397,7 +397,7 @@ describe("createContributionService", () => {
+     }
+   });
+ 
+-  it("forwards deprecate edits without running gates against them", async () => {
++  it("forwards delete edits without running gates against them", async () => {
+     const port = new FakeContributionPort();
+     port.records = [contribution()];
+     const service = createContributionService({
+@@ -407,14 +407,14 @@ describe("createContributionService", () => {
+       gates: [shapeGate],
+     });
+     const edit: KnowledgeContributionEdit = {
+-      op: "deprecate",
++      op: "delete",
+       targetRowId: "operator:knowledge:stale",
+       reason: "superseded",
+     };
+     await service.appendCommit({
+       principal: agent,
+       contributionId: "contrib-agent-1-abc123",
+-      body: { message: "deprecate test", edits: [edit] },
++      body: { message: "delete test", edits: [edit] },
+     });
+     expect(port.lastAppend?.edits).toEqual([edit]);
+   });
+@@ -454,7 +454,7 @@ describe("createContributionService", () => {
+       rateLimit: { maxOpenPerPrincipal: 5 },
+     });
+     const edit: KnowledgeContributionEdit = {
+-      op: "deprecate",
++      op: "delete",
+       targetRowId: "operator:knowledge:stale",
+       reason: "superseded by contribution branch revision",
+     };
+@@ -462,7 +462,7 @@ describe("createContributionService", () => {
+     await service.appendCommit({
+       principal: agent,
+       contributionId: "contrib-agent-1-abc123",
+-      body: { message: "deprecate stale row", edits: [edit] },
++      body: { message: "delete stale row", edits: [edit] },
+     });
+ 
+     expect(port.lastAppend?.contributionId).toBe("contrib-agent-1-abc123");
+@@ -486,7 +486,7 @@ describe("createContributionService", () => {
+           message: "not mine",
+           edits: [
+             {
+-              op: "deprecate",
++              op: "delete",
+               targetRowId: "operator:knowledge:stale",
+               reason: "not mine",
+             },
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 7304cf39..f1940332 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -14,6 +14,9 @@ importers:
+ 
+   .:
+     devDependencies:
++      '@playwright/test':
++        specifier: ^1.56.1
++        version: 1.61.0
+       '@types/node':
+         specifier: ^22
+         version: 22.19.19
+@@ -199,7 +202,7 @@ importers:
+         version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3))
+       '@rainbow-me/rainbowkit-siwe-next-auth':
+         specifier: ^0.5.0
+-        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)))(next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
++        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)))(next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+       '@tanstack/react-query':
+         specifier: 5.90.10
+         version: 5.90.10(react@19.0.0)
+@@ -277,10 +280,10 @@ importers:
+         version: 5.1.11
+       next:
+         specifier: 16.2.3
+-        version: 16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++        version: 16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+       next-auth:
+         specifier: ^4.24.10
+-        version: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++        version: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+       next-themes:
+         specifier: ^0.4.6
+         version: 0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+@@ -305,6 +308,9 @@ importers:
+       react-dom:
+         specifier: 19.0.0
+         version: 19.0.0(react@19.0.0)
++      react-force-graph-3d:
++        specifier: ^1.29.1
++        version: 1.29.1(react@19.0.0)
+       recharts:
+         specifier: ^2.15.4
+         version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+@@ -386,7 +392,7 @@ importers:
+         version: 27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+       next-test-api-route-handler:
+         specifier: ^5.0.3
+-        version: 5.0.5(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))
++        version: 5.0.5(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))
+       undici:
+         specifier: ^7.24.0
+         version: 7.27.2
+@@ -702,7 +708,7 @@ importers:
+         version: 5.90.10(react@19.0.0)
+       next-auth:
+         specifier: '>=4'
+-        version: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++        version: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+     devDependencies:
+       '@types/react':
+         specifier: ^19.0.0
+@@ -986,6 +992,10 @@ importers:
+ 
+ packages:
+ 
++  3d-force-graph@1.80.0:
++    resolution: {integrity: sha512-tzI353gW1nXPpnC7VTa3JjMg+3cp77qOLUFO0vucPTfF+q5R6sQsNsIqVTbRIb7RSypn14nBa4yfkOe9ThxASw==}
++    engines: {node: '>=12'}
++
+   '@0no-co/graphql.web@1.2.0':
+     resolution: {integrity: sha512-/1iHy9TTr63gE1YcR5idjx8UREz1s0kFhydf3bBLCXyqjhkIc6igAzTOx3zPifCwFR87tsh/4Pa9cNts6d2otw==}
+     peerDependencies:
+@@ -2781,6 +2791,11 @@ packages:
+     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
+     engines: {node: '>=14'}
+ 
++  '@playwright/test@1.61.0':
++    resolution: {integrity: sha512-cKA5B6lpFEMyMGjxF54QihfYpB4FkEGH+qZhtArDEG+wezQAJY8Pq6C7T1SjWz+FFzt3TbyoXBQYk/0292TdJA==}
++    engines: {node: '>=18'}
++    hasBin: true
++
+   '@privy-io/node@0.10.1':
+     resolution: {integrity: sha512-lAnbrZAT4ZQaG5YXqRcshqtN6maFwMg1DAP2Uc4C1Jx0E1icNaSBZM36n8chrOblOJrDlkuwlz4qrWq0GmBxNw==}
+     peerDependencies:
+@@ -4495,6 +4510,9 @@ packages:
+   '@tsparticles/updater-stroke-color@3.9.1':
+     resolution: {integrity: sha512-3x14+C2is9pZYTg9T2TiA/aM1YMq4wLdYaZDcHm3qO30DZu5oeQq0rm/6w+QOGKYY1Z3Htg9rlSUZkhTHn7eDA==}
+ 
++  '@tweenjs/tween.js@25.0.0':
++    resolution: {integrity: sha512-XKLA6syeBUaPzx4j3qwMqzzq+V4uo72BnlbOjmuljLrRqdsd3qnzvZZoxvMHZ23ndsRS4aufU6JOZYpCbU6T1A==}
++
+   '@types/aria-query@5.0.4':
+     resolution: {integrity: sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw==}
+ 
+@@ -4897,6 +4915,10 @@ packages:
+     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
+     engines: {node: '>= 0.6'}
+ 
++  accessor-fn@1.5.3:
++    resolution: {integrity: sha512-rkAofCwe/FvYFUlMB0v0gWmhqtfAtV1IUkdPbfhTUyYniu5LrC0A0UJkTH0Jv3S8SvwkmfuAlY+mQIJATdocMA==}
++    engines: {node: '>=12'}
++
+   acorn-import-attributes@1.9.5:
+     resolution: {integrity: sha512-n02Vykv5uA3eHGM/Z2dQrcD56kL8TyDb2p1+0P83PClMnC/nc+anbQRhIOWnSq4Ke/KvDPrY3C9hDtC/A3eHnQ==}
+     peerDependencies:
+@@ -5487,14 +5509,25 @@ packages:
+     resolution: {integrity: sha512-tdQAmyA18i4J7wprpYq8ClcxZy3SC31QMeByyCFyRt7BVHdREQZ5lpzoe5mFEYZUWe+oq8HBvk9JjpibyEV4Jg==}
+     engines: {node: '>=12'}
+ 
++  d3-binarytree@1.0.2:
++    resolution: {integrity: sha512-cElUNH+sHu95L04m92pG73t2MEJXKu+GeKUN1TJkFsu93E5W8E9Sc3kHEGJKgenGvj19m6upSn2EunvMgMD2Yw==}
++
+   d3-color@3.1.0:
+     resolution: {integrity: sha512-zg/chbXyeBtMQ1LbD/WSoW2DpC3I0mpmPdW+ynRTj/x2DAWYrIY7qeZIHidozwV24m4iavr15lNwIwLxRmOxhA==}
+     engines: {node: '>=12'}
+ 
++  d3-dispatch@3.0.1:
++    resolution: {integrity: sha512-rzUyPU/S7rwUflMyLc1ETDeBj0NRuHKKAcvukozwhshr6g6c5d8zh4c2gQjY2bZ0dXeGLWc1PF174P2tVvKhfg==}
++    engines: {node: '>=12'}
++
+   d3-ease@3.0.1:
+     resolution: {integrity: sha512-wR/XK3D3XcLIZwpbvQwQ5fK+8Ykds1ip7A2Txe0yxncXSdq1L9skcG7blcedkOX+ZcgxGAmLX1FrRGbADwzi0w==}
+     engines: {node: '>=12'}
+ 
++  d3-force-3d@3.0.6:
++    resolution: {integrity: sha512-4tsKHUPLOVkyfEffZo1v6sFHvGFwAIIjt/W8IThbp08DYAsXZck+2pSHEG5W1+gQgEvFLdZkYvmJAbRM2EzMnA==}
++    engines: {node: '>=12'}
++
+   d3-format@3.1.2:
+     resolution: {integrity: sha512-AJDdYOdnyRDV5b6ArilzCPPwc1ejkHcoyFarqlPqT7zRYjhavcT3uSrqcMvsgh2CgoPbK3RCwyHaVyxYcP2Arg==}
+     engines: {node: '>=12'}
+@@ -5503,14 +5536,29 @@ packages:
+     resolution: {integrity: sha512-3bYs1rOD33uo8aqJfKP3JWPAibgw8Zm2+L9vBKEHJ2Rg+viTR7o5Mmv5mZcieN+FRYaAOWX5SJATX6k1PWz72g==}
+     engines: {node: '>=12'}
+ 
++  d3-octree@1.1.0:
++    resolution: {integrity: sha512-F8gPlqpP+HwRPMO/8uOu5wjH110+6q4cgJvgJT6vlpy3BEaDIKlTZrgHKZSp/i1InRpVfh4puY/kvL6MxK930A==}
++
+   d3-path@3.1.0:
+     resolution: {integrity: sha512-p3KP5HCf/bvjBSSKuXid6Zqijx7wIfNW+J/maPs+iwR35at5JCbLUT0LzF1cnjbCHWhqzQTIN2Jpe8pRebIEFQ==}
+     engines: {node: '>=12'}
+ 
++  d3-quadtree@3.0.1:
++    resolution: {integrity: sha512-04xDrxQTDTCFwP5H6hRhsRcb9xxv2RzkcsygFzmkSIOJy3PeRJP7sNk3VRIbKXcog561P9oU0/rVH6vDROAgUw==}
++    engines: {node: '>=12'}
++
++  d3-scale-chromatic@3.1.0:
++    resolution: {integrity: sha512-A3s5PWiZ9YCXFye1o246KoscMWqf8BsD9eRiJ3He7C9OBaxKhAd5TFCdEx/7VbKtxxTsu//1mMJFrEt572cEyQ==}
++    engines: {node: '>=12'}
++
+   d3-scale@4.0.2:
+     resolution: {integrity: sha512-GZW464g1SH7ag3Y7hXjf8RoUuAFIqklOAq3MRl4OaWabTFJY9PN/E1YklhXLh+OQ3fM9yS2nOkCoS+WLZ6kvxQ==}
+     engines: {node: '>=12'}
+ 
++  d3-selection@3.0.0:
++    resolution: {integrity: sha512-fmTRWbNMmsmWq6xJV8D19U/gw/bwrHfNXxrIN+HfZgnzqTHp9jOmKMhsTUjXOJnZOdZY9Q28y4yebKzqDKlxlQ==}
++    engines: {node: '>=12'}
++
+   d3-shape@3.2.0:
+     resolution: {integrity: sha512-SaLBuwGm3MOViRq2ABk3eLoxwZELpH6zhl3FbAoJ7Vm1gofKx6El1Ib5z23NUEhF9AsGl7y+dzLe5Cw2AArGTA==}
+     engines: {node: '>=12'}
+@@ -5527,6 +5575,10 @@ packages:
+     resolution: {integrity: sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==}
+     engines: {node: '>=12'}
+ 
++  data-bind-mapper@1.0.3:
++    resolution: {integrity: sha512-QmU3lyEnbENQPo0M1F9BMu4s6cqNNp8iJA+b/HP2sSb7pf3dxwF3+EP1eO69rwBfH9kFJ1apmzrtogAmVt2/Xw==}
++    engines: {node: '>=12'}
++
+   data-urls@6.0.1:
+     resolution: {integrity: sha512-euIQENZg6x8mj3fO6o9+fOW8MimUI4PpD/fZBhJfeioZVy9TUpM4UY7KjQNVZFlqwJ0UdzRDzkycB997HEq1BQ==}
+     engines: {node: '>=20'}
+@@ -6062,6 +6114,10 @@ packages:
+   fix-dts-default-cjs-exports@1.0.1:
+     resolution: {integrity: sha512-pVIECanWFC61Hzl2+oOCtoJ3F17kglZC/6N94eRWycFgBH35hHx0Li604ZIzhseh97mf2p0cv7vVrOZGoqhlEg==}
+ 
++  float-tooltip@1.7.5:
++    resolution: {integrity: sha512-/kXzuDnnBqyyWyhDMH7+PfP8J/oXiAavGzcRxASOMRHFuReDtofizLLJsf7nnDLAfEaMW4pVWaXrAjtnglpEkg==}
++    engines: {node: '>=12'}
++
+   fn.name@1.1.0:
+     resolution: {integrity: sha512-GRnmB5gPyJpAhTQdSZTSp9uaPSvl09KoYcMQtsB9rQoOmzs9dH6ffeccH+Z+cv6P68Hu5bC6JjRh4Ah/mHSNRw==}
+ 
+@@ -6114,6 +6170,11 @@ packages:
+   fs-constants@1.0.0:
+     resolution: {integrity: sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==}
+ 
++  fsevents@2.3.2:
++    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
++    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
++    os: [darwin]
++
+   fsevents@2.3.3:
+     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
+     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+@@ -6418,6 +6479,10 @@ packages:
+   jackspeak@3.4.3:
+     resolution: {integrity: sha512-OGlZQpz2yfahA/Rd1Y8Cd9SIEsqvXkLVoSw/cgwhnhFMDbsQFeZYoJJ7bIZBS9BcamUW96asq/npPWugM+RQBw==}
+ 
++  jerrypick@1.1.2:
++    resolution: {integrity: sha512-YKnxXEekXKzhpf7CLYA0A+oDP8V0OhICNCr5lv96FvSsDEmrb0GKM776JgQvHTMjr7DTTPEVv/1Ciaw0uEWzBA==}
++    engines: {node: '>=12'}
++
+   jiti@2.7.0:
+     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
+     hasBin: true
+@@ -6469,6 +6534,10 @@ packages:
+   json-schema@0.4.0:
+     resolution: {integrity: sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==}
+ 
++  kapsule@1.16.3:
++    resolution: {integrity: sha512-4+5mNNf4vZDSwPhKprKwz3330iisPrb08JyMgbsdFrimBCKNHecua/WBwvVg3n7vwx0C1ARjfhwIpbrbd9n5wg==}
++    engines: {node: '>=12'}
++
+   keccak@3.0.4:
+     resolution: {integrity: sha512-3vKuW0jV8J3XNTzvfyicFR5qvxrSAGl7KIhvgOu5cmWwM7tZRj3fMbj/pfIf4be7aznbc+prBWGjywox/g2Y6Q==}
+     engines: {node: '>=10.0.0'}
+@@ -6635,6 +6704,9 @@ packages:
+     resolution: {integrity: sha512-t7hw9pI+WvuwNJXwk5zVHpyhIqzg2qTlklJOf0mVxGSbe3Fp2VieZcduNYjaLDoy6p9uGpQEGWG87WpMKlNq8g==}
+     engines: {node: '>=8'}
+ 
++  lodash-es@4.18.1:
++    resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
++
+   lodash.camelcase@4.3.0:
+     resolution: {integrity: sha512-TwuEnCnxbc3rAvhf/LbG7tJUDzhqXyFnv3dtzLOPgCG/hODL7WFnsbwktkD7yUV0RrreP/l1PALq/YSg6VvjlA==}
+ 
+@@ -7016,6 +7088,21 @@ packages:
+     resolution: {integrity: sha512-IWjIExdVYlmwXuzHdY/Q3lXCv1gbqoAXPazQhy2w4Xgtgha3H0OOujEESVPQcFUFMWm+pAk2gKnb57g8S41JZg==}
+     engines: {node: '>= 20.0.0'}
+ 
++  ngraph.events@1.4.0:
++    resolution: {integrity: sha512-NeDGI4DSyjBNBRtA86222JoYietsmCXbs8CEB0dZ51Xeh4lhVl1y3wpWLumczvnha8sFQIW4E0vvVWwgmX2mGw==}
++
++  ngraph.forcelayout@3.3.1:
++    resolution: {integrity: sha512-MKBuEh1wujyQHFTW57y5vd/uuEOK0XfXYxm3lC7kktjJLRdt/KEKEknyOlc6tjXflqBKEuYBBcu7Ax5VY+S6aw==}
++
++  ngraph.graph@20.1.2:
++    resolution: {integrity: sha512-W/G3GBR3Y5UxMLHTUCPP9v+pbtpzwuAEIqP5oZV+9IwgxAIEZwh+Foc60iPc1idlnK7Zxu0p3puxAyNmDvBd0Q==}
++
++  ngraph.merge@1.0.0:
++    resolution: {integrity: sha512-5J8YjGITUJeapsomtTALYsw7rFveYkM+lBj3QiYZ79EymQcuri65Nw3knQtFxQBU1r5iOaVRXrSwMENUPK62Vg==}
++
++  ngraph.random@1.2.0:
++    resolution: {integrity: sha512-4EUeAGbB2HWX9njd6bP6tciN6ByJfoaAvmVL9QTaZSeXrW46eNGA9GajiXiPBbvFqxUWFkEbyo6x5qsACUuVfA==}
++
+   node-addon-api@2.0.2:
+     resolution: {integrity: sha512-Ntyt4AIXyaLIuMHF6IOoTakB3K+RWxwtsHNRxllEoA6vPwP9o4866g6YWDLUdnucilZhmkxiHwHr11gAENw+QA==}
+ 
+@@ -7319,10 +7406,24 @@ packages:
+   pkg-types@1.3.1:
+     resolution: {integrity: sha512-/Jm5M4RvtBFVkKWRu2BLUTNP8/M2a+UwuAX+ae4770q1qVGtfjG+WTCupoZixokjmHiry8uI+dlY8KXYV5HVVQ==}
+ 
++  playwright-core@1.61.0:
++    resolution: {integrity: sha512-caX7TrY3Ml6egyDX0WUcTHDxodl/b51y5wJOdCEA36QviK/s2g081hvmGs8eaE3DWb6NYZQ6BjO/QkNRPenoPA==}
++    engines: {node: '>=18'}
++    hasBin: true
++
++  playwright@1.61.0:
++    resolution: {integrity: sha512-Z+7BeeqQPRRzklHsVFP4KTGIyMxKUmfeRA4WisM6G3/XW6nwGeX6fX9qYaDa+CiUqpOkb2f6X3nar05R3kSuJQ==}
++    engines: {node: '>=18'}
++    hasBin: true
++
+   pngjs@5.0.0:
+     resolution: {integrity: sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==}
+     engines: {node: '>=10.13.0'}
+ 
++  polished@4.3.1:
++    resolution: {integrity: sha512-OBatVyC/N7SCW/FaDHrSd+vn0o5cS855TOmYi4OkdWUMSJCET/xip//ch8xGUvtr3i44X9LVyWwQlRMTN3pwSA==}
++    engines: {node: '>=10'}
++
+   pony-cause@2.1.11:
+     resolution: {integrity: sha512-M7LhCsdNbNgiLYiP4WjsfLUuFmCfnjdF6jKe2R9NKl4WFN+HZPGHJZ9lnLP7f9ZnKe3U9nuWD0szirmj+migUg==}
+     engines: {node: '>=12.0.0'}
+@@ -7568,6 +7669,12 @@ packages:
+     peerDependencies:
+       react: ^19.0.0
+ 
++  react-force-graph-3d@1.29.1:
++    resolution: {integrity: sha512-5Vp+PGpYnO+zLwgK2NvNqdXHvsWLrFzpDfJW1vUA1twjo9SPvXqfUYQrnRmAbD+K2tOxkZw1BkbH31l5b4TWHg==}
++    engines: {node: '>=12'}
++    peerDependencies:
++      react: '*'
++
+   react-is@16.13.1:
+     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
+ 
+@@ -7577,6 +7684,12 @@ packages:
+   react-is@18.3.1:
+     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
+ 
++  react-kapsule@2.6.0:
++    resolution: {integrity: sha512-HzLJoYb1n1kfwjXbqFFcRR0EA6oPsJ64tNdDmCSaL/bz2o9wUZRSb0cMe//grLFeF9EVoL4CD/e6ozLyzEv+PQ==}
++    engines: {node: '>=12'}
++    peerDependencies:
++      react: '>=16.13.1'
++
+   react-markdown@10.1.0:
+     resolution: {integrity: sha512-qKxVopLT/TyA6BX3Ue5NwabOsAzm0Q7kAPwq6L+wWDwisYs7R8vZ0nRXqq6rkueboxpkjvLGU9fWifiX/ZZFxQ==}
+     peerDependencies:
+@@ -8097,6 +8210,21 @@ packages:
+     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
+     engines: {node: '>=20'}
+ 
++  three-forcegraph@1.43.4:
++    resolution: {integrity: sha512-FtmiZP/T16ZQaHza3JDaDn0YTXFtg9e7pGnTeU8nzu0NNkx7MpWbF/GvmpbQsWHx3rukHtkRv1fTorLPB3FDEA==}
++    engines: {node: '>=12'}
++    peerDependencies:
++      three: '>=0.118.3'
++
++  three-render-objects@1.42.0:
++    resolution: {integrity: sha512-KYfkPrYGEbIK8ChFocWqOF1aAN80FBUBWVYB8mB2oBpVuVN+52FvvngVYB5ieFANQu7Rt21rPYZ/xKaAgVWWRQ==}
++    engines: {node: '>=12'}
++    peerDependencies:
++      three: '>=0.179'
++
++  three@0.184.0:
++    resolution: {integrity: sha512-wtTRjG92pM5eUg/KuUnHsqSAlPM296brTOcLgMRqEeylYTh/CdtvKUvCyyCQTzFuStieWxvZb8mVTMvdPyUpxg==}
++
+   throttleit@2.1.0:
+     resolution: {integrity: sha512-nt6AMGKW1p/70DF/hGBdJB57B8Tspmbp5gfJ8ilhLnt7kkr2ye7hzD6NVG8GGErk2HWF34igrL2CXmNIkzKqKw==}
+     engines: {node: '>=18'}
+@@ -8111,6 +8239,9 @@ packages:
+   tinybench@2.9.0:
+     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
+ 
++  tinycolor2@1.6.0:
++    resolution: {integrity: sha512-XPaBkWQJdsf3pLKJV9p4qN/S+fm2Oj8AIPo1BTUhg5oxkvm9+SVEGFdhyOz7tTdUTfvxMiAs4sp6/eZO2Ew+pw==}
++
+   tinyexec@0.3.2:
+     resolution: {integrity: sha512-KQQR9yN7R5+OSwaK0XQoj22pwHoTlgYqmUscPYoknOoWCWfj/5/ABTMRi69FrKU5ffPVh5QcFikpWJI/P1ocHA==}
+ 
+@@ -8972,6 +9103,14 @@ packages:
+ 
+ snapshots:
+ 
++  3d-force-graph@1.80.0:
++    dependencies:
++      accessor-fn: 1.5.3
++      kapsule: 1.16.3
++      three: 0.184.0
++      three-forcegraph: 1.43.4(three@0.184.0)
++      three-render-objects: 1.42.0(three@0.184.0)
++
+   '@0no-co/graphql.web@1.2.0(graphql@16.14.1)':
+     optionalDependencies:
+       graphql: 16.14.1
+@@ -10966,6 +11105,10 @@ snapshots:
+   '@pkgjs/parseargs@0.11.0':
+     optional: true
+ 
++  '@playwright/test@1.61.0':
++    dependencies:
++      playwright: 1.61.0
++
+   '@privy-io/node@0.10.1(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
+     dependencies:
+       '@hpke/chacha20poly1305': 1.8.0
+@@ -11804,10 +11947,10 @@ snapshots:
+ 
+   '@radix-ui/rect@1.1.1': {}
+ 
+-  '@rainbow-me/rainbowkit-siwe-next-auth@0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)))(next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)':
++  '@rainbow-me/rainbowkit-siwe-next-auth@0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)))(next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)':
+     dependencies:
+       '@rainbow-me/rainbowkit': 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3))
+-      next-auth: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++      next-auth: 4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+       react: 19.0.0
+ 
+   '@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3))':
+@@ -13063,6 +13206,8 @@ snapshots:
+     dependencies:
+       '@tsparticles/engine': 3.9.1
+ 
++  '@tweenjs/tween.js@25.0.0': {}
++
+   '@types/aria-query@5.0.4': {}
+ 
+   '@types/chai@5.2.3':
+@@ -14059,6 +14204,8 @@ snapshots:
+       mime-types: 3.0.2
+       negotiator: 1.0.0
+ 
++  accessor-fn@1.5.3: {}
++
+   acorn-import-attributes@1.9.5(acorn@8.16.0):
+     dependencies:
+       acorn: 8.16.0
+@@ -14613,18 +14760,39 @@ snapshots:
+     dependencies:
+       internmap: 2.0.3
+ 
++  d3-binarytree@1.0.2: {}
++
+   d3-color@3.1.0: {}
+ 
++  d3-dispatch@3.0.1: {}
++
+   d3-ease@3.0.1: {}
+ 
++  d3-force-3d@3.0.6:
++    dependencies:
++      d3-binarytree: 1.0.2
++      d3-dispatch: 3.0.1
++      d3-octree: 1.1.0
++      d3-quadtree: 3.0.1
++      d3-timer: 3.0.1
++
+   d3-format@3.1.2: {}
+ 
+   d3-interpolate@3.0.1:
+     dependencies:
+       d3-color: 3.1.0
+ 
++  d3-octree@1.1.0: {}
++
+   d3-path@3.1.0: {}
+ 
++  d3-quadtree@3.0.1: {}
++
++  d3-scale-chromatic@3.1.0:
++    dependencies:
++      d3-color: 3.1.0
++      d3-interpolate: 3.0.1
++
+   d3-scale@4.0.2:
+     dependencies:
+       d3-array: 3.2.4
+@@ -14633,6 +14801,8 @@ snapshots:
+       d3-time: 3.1.0
+       d3-time-format: 4.1.0
+ 
++  d3-selection@3.0.0: {}
++
+   d3-shape@3.2.0:
+     dependencies:
+       d3-path: 3.1.0
+@@ -14647,6 +14817,10 @@ snapshots:
+ 
+   d3-timer@3.0.1: {}
+ 
++  data-bind-mapper@1.0.3:
++    dependencies:
++      accessor-fn: 1.5.3
++
+   data-urls@6.0.1:
+     dependencies:
+       whatwg-mimetype: 5.0.0
+@@ -15237,6 +15411,12 @@ snapshots:
+       mlly: 1.8.2
+       rollup: 4.61.1
+ 
++  float-tooltip@1.7.5:
++    dependencies:
++      d3-selection: 3.0.0
++      kapsule: 1.16.3
++      preact: 10.29.2
++
+   fn.name@1.1.0: {}
+ 
+   follow-redirects@1.16.0: {}
+@@ -15275,6 +15455,9 @@ snapshots:
+ 
+   fs-constants@1.0.0: {}
+ 
++  fsevents@2.3.2:
++    optional: true
++
+   fsevents@2.3.3:
+     optional: true
+ 
+@@ -15639,6 +15822,8 @@ snapshots:
+     optionalDependencies:
+       '@pkgjs/parseargs': 0.11.0
+ 
++  jerrypick@1.1.2: {}
++
+   jiti@2.7.0: {}
+ 
+   jose@4.15.9: {}
+@@ -15698,6 +15883,10 @@ snapshots:
+ 
+   json-schema@0.4.0: {}
+ 
++  kapsule@1.16.3:
++    dependencies:
++      lodash-es: 4.18.1
++
+   keccak@3.0.4:
+     dependencies:
+       node-addon-api: 2.0.2
+@@ -15836,6 +16025,8 @@ snapshots:
+     dependencies:
+       p-locate: 4.1.0
+ 
++  lodash-es@4.18.1: {}
++
+   lodash.camelcase@4.3.0: {}
+ 
+   lodash@4.18.1: {}
+@@ -16335,13 +16526,13 @@ snapshots:
+ 
+   negotiator@1.0.0: {}
+ 
+-  next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
++  next-auth@4.24.14(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
+     dependencies:
+       '@babel/runtime': 7.29.7
+       '@panva/hkdf': 1.2.1
+       cookie: 0.7.2
+       jose: 4.15.9
+-      next: 16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++      next: 16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+       oauth: 0.9.15
+       openid-client: 5.7.1
+       preact: 10.29.2
+@@ -16350,19 +16541,19 @@ snapshots:
+       react-dom: 19.0.0(react@19.0.0)
+       uuid: 8.3.2
+ 
+-  next-test-api-route-handler@5.0.5(next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)):
++  next-test-api-route-handler@5.0.5(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)):
+     dependencies:
+       '@whatwg-node/server': 0.10.18
+       cookie: 1.1.1
+       core-js: 3.49.0
+-      next: 16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
++      next: 16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+ 
+   next-themes@0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
+     dependencies:
+       react: 19.0.0
+       react-dom: 19.0.0(react@19.0.0)
+ 
+-  next@16.2.3(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
++  next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
+     dependencies:
+       '@next/env': 16.2.3
+       '@swc/helpers': 0.5.15
+@@ -16382,6 +16573,7 @@ snapshots:
+       '@next/swc-win32-arm64-msvc': 16.2.3
+       '@next/swc-win32-x64-msvc': 16.2.3
+       '@opentelemetry/api': 1.9.1
++      '@playwright/test': 1.61.0
+       sharp: 0.34.5
+     transitivePeerDependencies:
+       - '@babel/core'
+@@ -16389,6 +16581,22 @@ snapshots:
+ 
+   nexus-rpc@0.0.2: {}
+ 
++  ngraph.events@1.4.0: {}
++
++  ngraph.forcelayout@3.3.1:
++    dependencies:
++      ngraph.events: 1.4.0
++      ngraph.merge: 1.0.0
++      ngraph.random: 1.2.0
++
++  ngraph.graph@20.1.2:
++    dependencies:
++      ngraph.events: 1.4.0
++
++  ngraph.merge@1.0.0: {}
++
++  ngraph.random@1.2.0: {}
++
+   node-addon-api@2.0.2: {}
+ 
+   node-fetch-native@1.6.7: {}
+@@ -16749,8 +16957,20 @@ snapshots:
+       mlly: 1.8.2
+       pathe: 2.0.3
+ 
++  playwright-core@1.61.0: {}
++
++  playwright@1.61.0:
++    dependencies:
++      playwright-core: 1.61.0
++    optionalDependencies:
++      fsevents: 2.3.2
++
+   pngjs@5.0.0: {}
+ 
++  polished@4.3.1:
++    dependencies:
++      '@babel/runtime': 7.29.7
++
+   pony-cause@2.1.11: {}
+ 
+   porto@0.2.35(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(@wagmi/core@2.22.1(@tanstack/query-core@5.90.10)(@types/react@19.2.16)(react@19.0.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.0.0))(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)))(react@19.0.0)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.0.0))(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.16)(bufferutil@4.1.0)(ioredis@5.11.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)):
+@@ -17070,12 +17290,24 @@ snapshots:
+       react: 19.0.0
+       scheduler: 0.25.0
+ 
++  react-force-graph-3d@1.29.1(react@19.0.0):
++    dependencies:
++      3d-force-graph: 1.80.0
++      prop-types: 15.8.1
++      react: 19.0.0
++      react-kapsule: 2.6.0(react@19.0.0)
++
+   react-is@16.13.1: {}
+ 
+   react-is@17.0.2: {}
+ 
+   react-is@18.3.1: {}
+ 
++  react-kapsule@2.6.0(react@19.0.0):
++    dependencies:
++      jerrypick: 1.1.2
++      react: 19.0.0
++
+   react-markdown@10.1.0(@types/react@19.2.16)(react@19.0.0):
+     dependencies:
+       '@types/hast': 3.0.4
+@@ -17776,6 +18008,31 @@ snapshots:
+     dependencies:
+       real-require: 1.0.0
+ 
++  three-forcegraph@1.43.4(three@0.184.0):
++    dependencies:
++      accessor-fn: 1.5.3
++      d3-array: 3.2.4
++      d3-force-3d: 3.0.6
++      d3-scale: 4.0.2
++      d3-scale-chromatic: 3.1.0
++      data-bind-mapper: 1.0.3
++      kapsule: 1.16.3
++      ngraph.forcelayout: 3.3.1
++      ngraph.graph: 20.1.2
++      three: 0.184.0
++      tinycolor2: 1.6.0
++
++  three-render-objects@1.42.0(three@0.184.0):
++    dependencies:
++      '@tweenjs/tween.js': 25.0.0
++      accessor-fn: 1.5.3
++      float-tooltip: 1.7.5
++      kapsule: 1.16.3
++      polished: 4.3.1
++      three: 0.184.0
++
++  three@0.184.0: {}
++
+   throttleit@2.1.0: {}
+ 
+   tigerbeetle-node@0.16.76: {}
+@@ -17784,6 +18041,8 @@ snapshots:
+ 
+   tinybench@2.9.0: {}
+ 
++  tinycolor2@1.6.0: {}
++
+   tinyexec@0.3.2: {}
+ 
+   tinyexec@1.2.4: {}
+diff --git a/scripts/conductor-worktree-setup.sh b/scripts/conductor-worktree-setup.sh
+index 258f1115..5a94c705 100755
+--- a/scripts/conductor-worktree-setup.sh
++++ b/scripts/conductor-worktree-setup.sh
+@@ -11,7 +11,17 @@ set -euo pipefail
+ 
+ DEFAULT_BRANCH="${CONDUCTOR_DEFAULT_BRANCH:-main}"
+ WORKSPACE_ROOT="${CONDUCTOR_WORKSPACE_PATH:-$(pwd)}"
+-AUTH_ROOT="${COGNI_NODE_AUTH_ROOT:-${COGNI_TEMPLATE_ROOT:-${CONDUCTOR_ROOT_PATH:-$HOME/dev/cogni-template}}}"
++
++# AUTH_ROOT is THIS node's canonical (main) workspace checkout — the single place
++# that holds .env.cogni and .local-auth. A Conductor worktree spawn is a git worktree
++# of that main checkout, so we derive its path from git: no hardcoded or personal path,
++# and never a reach into an unrelated repo. Override with COGNI_NODE_AUTH_ROOT if needed.
++derive_main_workspace() {
++  local common_dir
++  common_dir="$(git -C "$WORKSPACE_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
++  (cd "$WORKSPACE_ROOT" && cd "$(dirname "$common_dir")" && pwd)
++}
++AUTH_ROOT="${COGNI_NODE_AUTH_ROOT:-${CONDUCTOR_ROOT_PATH:-$(derive_main_workspace || true)}}"
+ 
+ warn() {
+   printf 'warn: %s\n' "$1" >&2
+@@ -21,7 +31,34 @@ refresh_workspace_base_ref() {
+   git fetch origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+ }
+ 
++# Conductor frequently forms a worktree off a stale local base, so the checked-out
++# branch lands behind origin. Bring it up to date with the freshly fetched base
++# (the `git pull main` step). Conflict-safe: on a dirty tree, detached HEAD, or a
++# merge conflict we warn and continue rather than leaving the worktree wedged.
++sync_workspace_to_base() {
++  if ! git diff --quiet || ! git diff --cached --quiet; then
++    warn "workspace has uncommitted changes; skipped $DEFAULT_BRANCH sync"
++    return
++  fi
++
++  local branch
++  branch="$(git branch --show-current 2>/dev/null || true)"
++  if [[ -z "$branch" ]]; then
++    warn "detached HEAD; skipped $DEFAULT_BRANCH sync"
++    return
++  fi
++
++  if ! git merge --no-edit "origin/$DEFAULT_BRANCH"; then
++    git merge --abort 2>/dev/null || true
++    warn "origin/$DEFAULT_BRANCH does not merge cleanly into $branch; left as-is to resolve manually"
++  fi
++}
++
+ refresh_auth_root_main() {
++  if [[ -z "$AUTH_ROOT" || "$AUTH_ROOT" == "$WORKSPACE_ROOT" ]]; then
++    return
++  fi
++
+   if ! git -C "$AUTH_ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
+     warn "auth root is not a git checkout: $AUTH_ROOT"
+     return
+@@ -53,14 +90,21 @@ link_from_auth_root() {
+   local name="$1"
+   local src_path="$AUTH_ROOT/$name"
+ 
++  if [[ -z "$AUTH_ROOT" || "$AUTH_ROOT" == "$WORKSPACE_ROOT" ]]; then
++    warn "no separate main-workspace root resolved; using local $name as-is, skipped link"
++    return
++  fi
++
+   if [[ ! -e "$src_path" ]]; then
+     warn "$src_path missing; skipped $name symlink"
+     return
+   fi
+ 
+   if [[ -e "$name" && ! -L "$name" ]]; then
+-    printf '%s exists and is not a symlink; move it aside before running setup\n' "$name" >&2
+-    exit 1
++    # A real (non-symlink) file is the source of truth — e.g. a node ships its own
++    # node-scoped .env.cogni that must not be replaced by the auth-root copy.
++    warn "$name is a real file, not a symlink; keeping it and skipping the auth-root link"
++    return
+   fi
+ 
+   ln -sfn "$src_path" "$name"
+@@ -88,6 +132,7 @@ EOF
+ }
+ 
+ refresh_workspace_base_ref
++sync_workspace_to_base
+ refresh_auth_root_main
+ 
+ # Symlink, never copy, so secret rotation and captured auth in the human's
+diff --git a/scripts/dev/capture-authed-state.mjs b/scripts/dev/capture-authed-state.mjs
+new file mode 100644
+index 00000000..a70e20d6
+--- /dev/null
++++ b/scripts/dev/capture-authed-state.mjs
+@@ -0,0 +1,79 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
++// SPDX-FileCopyrightText: 2025 Cogni-DAO
++
++/**
++ * Module: `@scripts/dev/capture-authed-state`
++ * Purpose: Capture authed Playwright storageState from a running CDP-debuggable Chrome.
++ * Scope: One-off developer helper — connects over CDP, exports storageState to `.local-auth/<slug>.storageState.json`. Does not drive signin, does not launch Chrome, does not run in CI.
++ * Invariants: Reads only; never mutates the source Chrome profile. Write target is
++ *   always under `.local-auth/` which is gitignored.
++ * Side-effects: IO (connects to Chrome over CDP, writes one JSON file under .local-auth/).
++ * Links: docs/guides/candidate-auth-bootstrap.md
++ * @internal
++ */
++
++import { mkdir, writeFile } from "node:fs/promises";
++import { join } from "node:path";
++import { chromium } from "@playwright/test";
++
++const [, , slug, targetUrl] = process.argv;
++if (!slug || !targetUrl) {
++  console.error(
++    "Usage: node scripts/dev/capture-authed-state.mjs <env-slug> <url>"
++  );
++  process.exit(1);
++}
++
++const CDP_URL = process.env.CDP_URL ?? "http://localhost:9222";
++const outDir = join(process.cwd(), ".local-auth");
++const outFile = join(outDir, `${slug}.storageState.json`);
++
++const browser = await chromium.connectOverCDP(CDP_URL);
++const contexts = browser.contexts();
++if (contexts.length === 0) {
++  console.error(
++    `No browser contexts found at ${CDP_URL}. Is Chrome running with --remote-debugging-port=9222?`
++  );
++  process.exit(2);
++}
++
++const targetHost = new URL(targetUrl).host;
++let matchedContext = null;
++let matchedPage = null;
++for (const ctx of contexts) {
++  for (const page of ctx.pages()) {
++    try {
++      if (new URL(page.url()).host === targetHost) {
++        matchedContext = ctx;
++        matchedPage = page;
++        break;
++      }
++    } catch {
++      // ignore about:blank / chrome:// pages
++    }
++  }
++  if (matchedContext) break;
++}
++
++if (!matchedContext) {
++  console.error(
++    `No open tab found for host ${targetHost}. Open ${targetUrl} in the debuggable Chrome, sign in, then retry.`
++  );
++  process.exit(3);
++}
++
++const state = await matchedContext.storageState();
++await mkdir(outDir, { recursive: true });
++await writeFile(outFile, JSON.stringify(state, null, 2));
++
++const cookieDomains = [...new Set(state.cookies.map((c) => c.domain))].sort();
++console.log(`✅ Saved storageState → ${outFile}`);
++console.log(`   tab url:      ${matchedPage.url()}`);
++console.log(
++  `   cookies:      ${state.cookies.length} across ${cookieDomains.length} domains`
++);
++console.log(`   domains:      ${cookieDomains.join(", ")}`);
++console.log(`   origins:      ${state.origins.length} with localStorage`);
++
++await browser.close();

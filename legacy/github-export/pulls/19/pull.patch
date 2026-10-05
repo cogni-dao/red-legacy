@@ -1,0 +1,2700 @@
+From 998a67220f9cd0545a518d9bd8b0a4f14c4f4380 Mon Sep 17 00:00:00 2001
+From: flock-leader <derekgranito+flockleader@gmail.com>
+Date: Fri, 26 Jun 2026 11:26:36 -0700
+Subject: [PATCH] refactor(repo-spec): adopt governance section
+
+---
+ .cogni/repo-spec.yaml                         |   2 +-
+ .../viem-evm-onchain-client.adapter.ts        |   6 +-
+ .../server/onchain/viem-treasury.adapter.ts   |   4 +-
+ .../app/_facades/treasury/snapshot.server.ts  |   4 +-
+ app/src/app/api/setup/verify/route.ts         |   2 +-
+ app/src/bootstrap/container.ts                |   2 +-
+ app/src/features/governance/AGENTS.md         |   2 +-
+ .../governance/services/signal-dispatch.ts    |   2 +-
+ app/src/shared/config/AGENTS.md               |   2 +-
+ app/src/shared/config/repoSpec.server.ts      |  11 +-
+ app/src/shared/web3/AGENTS.md                 |   2 +-
+ app/tests/contract/setup/verify.test.ts       |   2 +-
+ .../unit/packages/repo-spec/accessors.test.ts |  57 +-
+ .../shared/config/repoSpec.server.test.ts     |  67 +-
+ .../privy/privy-operator-wallet.adapter.ts    |   2 +-
+ packages/repo-spec/AGENTS.md                  |   5 +-
+ packages/repo-spec/src/accessors.ts           | 799 +++++++++++-------
+ packages/repo-spec/src/index.ts               | 142 ++--
+ packages/repo-spec/src/schema.ts              | 727 ++++++++++------
+ packages/repo-spec/src/testing.ts             |   8 +-
+ 20 files changed, 1141 insertions(+), 707 deletions(-)
+
+diff --git a/.cogni/repo-spec.yaml b/.cogni/repo-spec.yaml
+index 0164c4ec..440c20ca 100644
+--- a/.cogni/repo-spec.yaml
++++ b/.cogni/repo-spec.yaml
+@@ -21,7 +21,7 @@ intent:
+     icon: "Crosshair"
+     color: "#ef4444"
+ 
+-cogni_dao:
++governance:
+   dao_contract: "0xe77f1d69b17e24aaab0299e9bc3bcf079fb78914"
+   plugin_contract: "0x95cc9c980795ee4c41c020791f28c5f5ae6cb5ce"
+   signal_contract: "0x3e35cafb2ebaa44c9ae9c012f5a9d29632777bbc"
+diff --git a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+index 9279079e..52ca2467 100644
+--- a/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
++++ b/app/src/adapters/server/onchain/viem-evm-onchain-client.adapter.ts
+@@ -44,19 +44,19 @@ export class ViemEvmOnchainClient implements EvmOnchainClient {
+     const env = serverEnv();
+     // On-chain READS (treasury balance, block number, logs) need only the chain
+     // identity + an RPC endpoint - NOT payment activation. Source the chain from the
+-    // node's DAO config (cogni_dao.chain_id), not getPaymentConfig: a balance read must
++    // node's DAO config (governance.chain_id), not getPaymentConfig: a balance read must
+     // work for any node with a DAO identity, activated or not. The getPaymentConfig() gate
+     // threw "Payment rails not activated" for every non-activated node -> fleet "Treasury --".
+     const dao = getDaoConfig();
+     if (!dao) {
+       throw new Error(
+-        "[ViemEvmOnchainClient] Node DAO identity not configured (cogni_dao section incomplete)"
++        "[ViemEvmOnchainClient] Node DAO identity not configured (governance section incomplete)"
+       );
+     }
+ 
+     if (Number(dao.chain_id) !== CHAIN.id) {
+       throw new Error(
+-        `[ViemEvmOnchainClient] Chain mismatch: repo-spec cogni_dao declares ${dao.chain_id}, CHAIN constant is ${CHAIN.id}`
++        `[ViemEvmOnchainClient] Chain mismatch: repo-spec governance.chain_id declares ${dao.chain_id}, CHAIN constant is ${CHAIN.id}`
+       );
+     }
+ 
+diff --git a/app/src/adapters/server/onchain/viem-treasury.adapter.ts b/app/src/adapters/server/onchain/viem-treasury.adapter.ts
+index 38f5f05b..60a5a778 100644
+--- a/app/src/adapters/server/onchain/viem-treasury.adapter.ts
++++ b/app/src/adapters/server/onchain/viem-treasury.adapter.ts
+@@ -31,13 +31,13 @@ export class ViemTreasuryAdapter implements TreasuryReadPort {
+     treasuryAddress: string;
+     tokenAddresses?: string[];
+   }): Promise<TreasurySnapshot> {
+-    // Validate chainId against the node's DAO identity (cogni_dao section).
++    // Validate chainId against the node's DAO identity (governance section).
+     // Treasury reads depend on chain identity, NOT payment-rail activation —
+     // a node can read its treasury before payments are turned on.
+     const dao = getDaoConfig();
+     if (!dao) {
+       throw new Error(
+-        "[ViemTreasuryAdapter] Node DAO identity not configured (cogni_dao section incomplete)"
++        "[ViemTreasuryAdapter] Node DAO identity not configured (governance section incomplete)"
+       );
+     }
+ 
+diff --git a/app/src/app/_facades/treasury/snapshot.server.ts b/app/src/app/_facades/treasury/snapshot.server.ts
+index 92ea482e..9d099a24 100644
+--- a/app/src/app/_facades/treasury/snapshot.server.ts
++++ b/app/src/app/_facades/treasury/snapshot.server.ts
+@@ -54,9 +54,9 @@ export async function getTreasurySnapshotFacade(
+         event: EVENT_NAMES.TREASURY_CONFIG_MISSING,
+         errorCode: "TREASURY_NO_DAO_CONFIG",
+       },
+-      "cogni_dao section missing or incomplete in repo-spec"
++      "governance section missing or incomplete in repo-spec"
+     );
+-    throw new Error("cogni_dao config missing from repo-spec");
++    throw new Error("governance config missing from repo-spec");
+   }
+ 
+   const treasuryAddress = daoConfig.dao_contract;
+diff --git a/app/src/app/api/setup/verify/route.ts b/app/src/app/api/setup/verify/route.ts
+index 43da1153..452313d1 100644
+--- a/app/src/app/api/setup/verify/route.ts
++++ b/app/src/app/api/setup/verify/route.ts
+@@ -396,7 +396,7 @@ node_id: "${nodeId}"
+ scope_id: "${scopeId}"
+ scope_key: "default"
+ 
+-cogni_dao:
++governance:
+   dao_contract: "${params.daoAddress}"
+   plugin_contract: "${params.pluginAddress}"
+   signal_contract: "${params.signalAddress}"
+diff --git a/app/src/bootstrap/container.ts b/app/src/bootstrap/container.ts
+index c6ba5144..a07e9316 100644
+--- a/app/src/bootstrap/container.ts
++++ b/app/src/bootstrap/container.ts
+@@ -720,7 +720,7 @@ function createContainer(): Container {
+         const treasuryAddress = getDaoTreasuryAddress();
+         if (!treasuryAddress) {
+           log.warn(
+-            "operator_wallet configured but cogni_dao.dao_contract missing — skipping operator wallet"
++            "operator_wallet configured but governance.dao_contract missing — skipping operator wallet"
+           );
+           return undefined;
+         }
+diff --git a/app/src/features/governance/AGENTS.md b/app/src/features/governance/AGENTS.md
+index 67632225..e95c5c63 100644
+--- a/app/src/features/governance/AGENTS.md
++++ b/app/src/features/governance/AGENTS.md
+@@ -44,7 +44,7 @@ Governance feature slice — schedule sync, governance status dashboard, claiman
+ - **Routes (app pages):** `/gov` (system), `/gov/epoch` (current), `/gov/history` (finalized), `/gov/holdings` (aggregated), `/gov/review` (approver admin — inline editing + EIP-712 sign & finalize)
+ - **Routes (API — in `src/app/api/v1/attribution/`):** `GET /epochs`, `GET /epochs/:id/user-projections`, `GET /epochs/:id/statement`, `GET /epochs/:id/claimants`, `GET /epochs/:id/activity`, `GET /epochs/:id/sign-data`, `GET|PATCH|DELETE /epochs/:id/review-subject-overrides`
+ - **CLI:** `pnpm governance:schedules:sync`, `pnpm db:seed`, `pnpm dev:setup`
+-- **Env/Config keys:** `.cogni/repo-spec.yaml` → `governance.schedules`, `cogni_dao` (signal contract, chain_id, etc.)
++- **Env/Config keys:** `.cogni/repo-spec.yaml` → `governance.schedules` + `governance` DAO identity fields (signal contract, chain_id, etc.)
+ 
+ ## Ports
+ 
+diff --git a/app/src/features/governance/services/signal-dispatch.ts b/app/src/features/governance/services/signal-dispatch.ts
+index 8de4e315..f77a683b 100644
+--- a/app/src/features/governance/services/signal-dispatch.ts
++++ b/app/src/features/governance/services/signal-dispatch.ts
+@@ -71,7 +71,7 @@ export function dispatchSignalExecution(
+   if (!daoConfig) {
+     log.debug(
+       { event: EVENT_NAMES.SIGNAL_DISPATCH_SKIPPED, reason: "no_dao_config" },
+-      "signal dispatch skipped — cogni_dao not configured in repo-spec"
++      "signal dispatch skipped — governance not configured in repo-spec"
+     );
+     return;
+   }
+diff --git a/app/src/shared/config/AGENTS.md b/app/src/shared/config/AGENTS.md
+index 8040aaf5..e5853d9e 100644
+--- a/app/src/shared/config/AGENTS.md
++++ b/app/src/shared/config/AGENTS.md
+@@ -75,5 +75,5 @@ Server-only thin wrapper over `@cogni/repo-spec`. Handles file I/O, caching, and
+ ## Notes
+ 
+ - Repo-spec changes require an image rebuild + deploy to take effect (baked at build time).
+-- Chain alignment: `cogni_dao.chain_id` must match `CHAIN_ID` from `@/shared/web3/chain` or startup fails.
++- Chain alignment: `governance.chain_id` must match `CHAIN_ID` from `@/shared/web3/chain` or startup fails.
+ - Schema and type definitions live in `@cogni/repo-spec`; this directory re-exports for stable `@/shared/config` import paths.
+diff --git a/app/src/shared/config/repoSpec.server.ts b/app/src/shared/config/repoSpec.server.ts
+index b93b4f6c..21706046 100644
+--- a/app/src/shared/config/repoSpec.server.ts
++++ b/app/src/shared/config/repoSpec.server.ts
+@@ -5,7 +5,7 @@
+  * Module: `@shared/config/repoSpec.server`
+  * Purpose: Server-only thin wrapper — file I/O, caching, and CHAIN_ID validation for repo-spec accessors including DAO governance config.
+  * Scope: Reads and caches repo-spec on first access; does not define schemas, validation logic, or perform network I/O.
+- * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires all five cogni_dao fields.
++ * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires the four on-chain governance identity fields (base_url optional).
+  * Side-effects: IO (reads repo-spec from disk) on first call only.
+  * Links: packages/repo-spec/src/index.ts, .cogni/repo-spec.yaml
+  * @public
+@@ -228,15 +228,16 @@ export function getGovernanceConfig(): GovernanceConfig {
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// DAO config — cogni_dao section (for governance signal execution + review deep links)
++// DAO config — governance section (for governance signal execution + review deep links)
+ // ---------------------------------------------------------------------------
+ 
+ let cachedDaoConfig: DaoConfig | null | undefined;
+ 
+ /**
+  * DAO governance configuration from repo-spec.
+- * Returns null if cogni_dao section is missing or incomplete.
+- * All five fields must be present for the config to be valid.
++ * Returns null only when the on-chain identity (dao/plugin/signal contracts +
++ * chain_id) is incomplete. `base_url` is the optional governance-UI deep-link
++ * host and does not gate this read.
+  */
+ export function getDaoConfig(): DaoConfig | null {
+ 	if (cachedDaoConfig !== undefined) return cachedDaoConfig;
+@@ -303,7 +304,7 @@ export function getOperatorWalletConfig(): OperatorWalletSpec | undefined {
+ let cachedDaoTreasuryAddress: string | undefined | null = null;
+ 
+ /**
+- * DAO treasury address from repo-spec (cogni_dao.dao_contract).
++ * DAO treasury address from repo-spec (governance.dao_contract).
+  * Returns undefined if not present.
+  */
+ export function getDaoTreasuryAddress(): string | undefined {
+diff --git a/app/src/shared/web3/AGENTS.md b/app/src/shared/web3/AGENTS.md
+index 52c9c5f2..57852097 100644
+--- a/app/src/shared/web3/AGENTS.md
++++ b/app/src/shared/web3/AGENTS.md
+@@ -77,7 +77,7 @@ import { CHAIN, CHAIN_ID, USDC_TOKEN_ADDRESS } from "@/shared/web3";
+ ## Change Protocol
+ 
+ - Update this file when adding new chain constants or changing target chain
+-- Update .cogni/repo-spec.yaml cogni_dao.chain_id to match
++- Update .cogni/repo-spec.yaml governance.chain_id to match
+ - Bump **Last reviewed** date
+ - Run `pnpm validate:chain` to verify consistency
+ 
+diff --git a/app/tests/contract/setup/verify.test.ts b/app/tests/contract/setup/verify.test.ts
+index e28a3d42..a7a309ab 100644
+--- a/app/tests/contract/setup/verify.test.ts
++++ b/app/tests/contract/setup/verify.test.ts
+@@ -185,7 +185,7 @@ describe("setupVerifyOperation contract", () => {
+           plugin: "0x9876543210987654321098765432109876543210",
+           signal: "0xfedcbafedcbafedcbafedcbafedcbafedcbafedc",
+         },
+-        repoSpecYaml: 'cogni_dao:\n  chain_id: "8453"\n',
++        repoSpecYaml: 'governance:\n  chain_id: "8453"\n',
+       };
+ 
+       const result = setupVerifyOperation.output.safeParse(success);
+diff --git a/app/tests/unit/packages/repo-spec/accessors.test.ts b/app/tests/unit/packages/repo-spec/accessors.test.ts
+index ed0db861..4e5eec7b 100644
+--- a/app/tests/unit/packages/repo-spec/accessors.test.ts
++++ b/app/tests/unit/packages/repo-spec/accessors.test.ts
+@@ -14,6 +14,7 @@
+ import {
+   extractChainId,
+   extractGovernanceConfig,
++  extractKnowledgeConfig,
+   extractLedgerApprovers,
+   extractLedgerConfig,
+   extractNodeId,
+@@ -35,7 +36,7 @@ const TEST_CHAIN_ID = 8453;
+ function buildSpec(overrides: Partial<RepoSpec> = {}): RepoSpec {
+   return parseRepoSpec({
+     node_id: TEST_NODE_ID,
+-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++    governance: { chain_id: String(TEST_CHAIN_ID) },
+     payments_in: {
+       credits_topup: {
+         provider: "cogni-usdc-backend-v1",
+@@ -52,7 +53,6 @@ function buildFullSpec(): RepoSpec {
+     node_id: TEST_NODE_ID,
+     scope_id: TEST_SCOPE_ID,
+     scope_key: "default",
+-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+     payments_in: {
+       credits_topup: {
+         provider: "cogni-usdc-backend-v1",
+@@ -71,6 +71,7 @@ function buildFullSpec(): RepoSpec {
+       },
+     },
+     governance: {
++      chain_id: String(TEST_CHAIN_ID),
+       schedules: [
+         {
+           charter: "HEARTBEAT",
+@@ -141,7 +142,7 @@ describe("extractChainId", () => {
+   it("handles numeric chain_id", () => {
+     const spec = parseRepoSpec({
+       node_id: TEST_NODE_ID,
+-      cogni_dao: { chain_id: 8453 },
++      governance: { chain_id: 8453 },
+       payments_in: {
+         credits_topup: {
+           provider: "test",
+@@ -155,7 +156,7 @@ describe("extractChainId", () => {
+   it("throws on non-numeric string", () => {
+     const spec = parseRepoSpec({
+       node_id: TEST_NODE_ID,
+-      cogni_dao: { chain_id: "not-a-number" },
++      governance: { chain_id: "not-a-number" },
+       payments_in: {
+         credits_topup: {
+           provider: "test",
+@@ -163,7 +164,7 @@ describe("extractChainId", () => {
+         },
+       },
+     });
+-    expect(() => extractChainId(spec)).toThrow(/Invalid cogni_dao\.chain_id/);
++    expect(() => extractChainId(spec)).toThrow(/Invalid governance\.chain_id/);
+   });
+ });
+ 
+@@ -174,6 +175,8 @@ describe("extractPaymentConfig", () => {
+       chainId: TEST_CHAIN_ID,
+       receivingAddress: "0x1111111111111111111111111111111111111111",
+       provider: "cogni-usdc-backend-v1",
++      markupFactor: 1.10803324099723,
++      revenueShare: 0,
+     });
+   });
+ 
+@@ -186,7 +189,7 @@ describe("extractPaymentConfig", () => {
+   it("trims whitespace from address and provider", () => {
+     const spec = parseRepoSpec({
+       node_id: TEST_NODE_ID,
+-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++      governance: { chain_id: String(TEST_CHAIN_ID) },
+       payments_in: {
+         credits_topup: {
+           provider: " cogni-usdc-backend-v1 ",
+@@ -199,10 +202,44 @@ describe("extractPaymentConfig", () => {
+   });
+ });
+ 
++describe("extractKnowledgeConfig", () => {
++  it("returns undefined when knowledge is absent", () => {
++    expect(extractKnowledgeConfig(buildSpec())).toBeUndefined();
++  });
++
++  it("returns the node knowledge database and Cogni-owned DoltHub remote", () => {
++    const spec = buildSpec({
++      knowledge: {
++        database: "knowledge_my_node",
++        remote: {
++          provider: "dolthub",
++          owner: "cogni-dao-test",
++          repo: "knowledge-my-node",
++          url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
++          custody: "cogni-owned",
++        },
++      },
++    });
++
++    expect(extractKnowledgeConfig(spec)).toEqual({
++      database: "knowledge_my_node",
++      remote: {
++        provider: "dolthub",
++        owner: "cogni-dao-test",
++        repo: "knowledge-my-node",
++        url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
++        custody: "cogni-owned",
++      },
++    });
++  });
++});
++
+ describe("extractGovernanceConfig", () => {
+   it("returns schedules and ledger config when fully specified", () => {
+     const config = extractGovernanceConfig(buildFullSpec());
+-    expect(config.schedules.some((schedule) => schedule.charter === "HEARTBEAT")).toBe(true);
++    expect(config.schedules).toHaveLength(2);
++    expect(config.schedules[0]?.charter).toBe("HEARTBEAT");
++    expect(config.schedules[1]?.charter).toBe("LEDGER_INGEST");
+     expect(config.ledger).toBeDefined();
+     expect(config.ledger?.scopeId).toBe(TEST_SCOPE_ID);
+   });
+@@ -239,7 +276,7 @@ describe("extractLedgerConfig", () => {
+   it("returns null when scope_id is missing", () => {
+     const spec = parseRepoSpec({
+       node_id: TEST_NODE_ID,
+-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++      governance: { chain_id: String(TEST_CHAIN_ID) },
+       payments_in: {
+         credits_topup: {
+           provider: "test",
+@@ -264,7 +301,7 @@ describe("extractLedgerConfig", () => {
+       node_id: TEST_NODE_ID,
+       scope_id: TEST_SCOPE_ID,
+       scope_key: "default",
+-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++      governance: { chain_id: String(TEST_CHAIN_ID) },
+       payments_in: {
+         credits_topup: {
+           provider: "test",
+@@ -301,7 +338,7 @@ describe("extractLedgerApprovers", () => {
+       node_id: TEST_NODE_ID,
+       scope_id: TEST_SCOPE_ID,
+       scope_key: "default",
+-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++      governance: { chain_id: String(TEST_CHAIN_ID) },
+       payments_in: {
+         credits_topup: {
+           provider: "test",
+diff --git a/app/tests/unit/shared/config/repoSpec.server.test.ts b/app/tests/unit/shared/config/repoSpec.server.test.ts
+index 7bdf47ed..63579204 100644
+--- a/app/tests/unit/shared/config/repoSpec.server.test.ts
++++ b/app/tests/unit/shared/config/repoSpec.server.test.ts
+@@ -56,7 +56,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -74,6 +74,8 @@ describe("getPaymentConfig (repo-spec)", () => {
+         chainId: CHAIN_ID,
+         receivingAddress: "0x1111111111111111111111111111111111111111",
+         provider: "cogni-usdc-backend-v1",
++        markupFactor: 1.10803324099723,
++        revenueShare: 0,
+       });
+     } finally {
+       fs.rmSync(tmpDir, { recursive: true, force: true });
+@@ -84,7 +86,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         "  chain_id: not-a-number",
+         "payments_in:",
+         "  credits_topup:",
+@@ -96,7 +98,9 @@ describe("getPaymentConfig (repo-spec)", () => {
+ 
+     try {
+       const { getPaymentConfig } = await loadPaymentConfig();
+-      expect(() => getPaymentConfig()).toThrow(/Invalid cogni_dao\.chain_id/i);
++      expect(() => getPaymentConfig()).toThrow(
++        /Invalid governance\.chain_id/i
++      );
+     } finally {
+       fs.rmSync(tmpDir, { recursive: true, force: true });
+     }
+@@ -106,7 +110,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID + 1}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -128,7 +132,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -150,7 +154,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -172,7 +176,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: ${CHAIN_ID}`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -196,7 +200,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -218,7 +222,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:",
+         "  credits_topup:",
+@@ -246,7 +250,7 @@ describe("getPaymentConfig (repo-spec)", () => {
+     const tmpDir = writeRepoSpec(
+       [
+         `node_id: "${TEST_NODE_ID}"`,
+-        "cogni_dao:",
++        "governance:",
+         `  chain_id: "${CHAIN_ID}"`,
+         "payments_in:", // missing credits_topup
+       ].join("\n")
+@@ -262,10 +266,10 @@ describe("getPaymentConfig (repo-spec)", () => {
+   });
+ });
+ 
+-/** Minimal valid base YAML for governance tests (cogni_dao + payments_in required by schema) */
++/** Minimal valid base YAML for governance tests (governance.chain_id + payments_in required by schema) */
+ const BASE_YAML = [
+   `node_id: "${TEST_NODE_ID}"`,
+-  "cogni_dao:",
++  "governance:",
+   `  chain_id: "${CHAIN_ID}"`,
+   "payments_in:",
+   "  credits_topup:",
+@@ -273,6 +277,19 @@ const BASE_YAML = [
+   '    receiving_address: "0x1111111111111111111111111111111111111111"',
+ ].join("\n");
+ 
++function buildGovernanceYaml(governanceLines: string[]): string {
++  return [
++    `node_id: "${TEST_NODE_ID}"`,
++    "governance:",
++    `  chain_id: "${CHAIN_ID}"`,
++    ...governanceLines,
++  "payments_in:",
++  "  credits_topup:",
++  "    provider: cogni-usdc-backend-v1",
++  '    receiving_address: "0x1111111111111111111111111111111111111111"',
++  ].join("\n");
++}
++
+ async function loadRepoSpecModule(): Promise<RepoSpecModule> {
+   vi.resetModules();
+   return import("@/shared/config/repoSpec.server");
+@@ -280,9 +297,7 @@ async function loadRepoSpecModule(): Promise<RepoSpecModule> {
+ 
+ describe("getGovernanceConfig (repo-spec)", () => {
+   it("returns schedules when governance section is provided", async () => {
+-    const yaml = [
+-      BASE_YAML,
+-      "governance:",
++    const yaml = buildGovernanceYaml([
+       "  schedules:",
+       "    - charter: COMMUNITY",
+       '      cron: "0 */6 * * *"',
+@@ -292,7 +307,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
+       '      cron: "0 * * * *"',
+       "      timezone: UTC",
+       "      entrypoint: GOVERN",
+-    ].join("\n");
++    ]);
+ 
+     const tmpDir = writeRepoSpec(yaml);
+     useTmpRoot(tmpDir);
+@@ -319,7 +334,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
+     }
+   });
+ 
+-  it("returns empty schedules when governance section is omitted", async () => {
++  it("returns empty schedules when governance schedules are omitted", async () => {
+     const tmpDir = writeRepoSpec(BASE_YAML);
+     useTmpRoot(tmpDir);
+ 
+@@ -334,14 +349,12 @@ describe("getGovernanceConfig (repo-spec)", () => {
+   });
+ 
+   it("defaults timezone to UTC when omitted", async () => {
+-    const yaml = [
+-      BASE_YAML,
+-      "governance:",
++    const yaml = buildGovernanceYaml([
+       "  schedules:",
+       "    - charter: ENGINEERING",
+       '      cron: "0 */4 * * *"',
+       "      entrypoint: ENGINEERING",
+-    ].join("\n");
++    ]);
+ 
+     const tmpDir = writeRepoSpec(yaml);
+     useTmpRoot(tmpDir);
+@@ -357,14 +370,12 @@ describe("getGovernanceConfig (repo-spec)", () => {
+   });
+ 
+   it("rejects schedule with empty charter", async () => {
+-    const yaml = [
+-      BASE_YAML,
+-      "governance:",
++    const yaml = buildGovernanceYaml([
+       "  schedules:",
+       '    - charter: ""',
+       '      cron: "0 * * * *"',
+       "      entrypoint: GOVERN",
+-    ].join("\n");
++    ]);
+ 
+     const tmpDir = writeRepoSpec(yaml);
+     useTmpRoot(tmpDir);
+@@ -380,14 +391,12 @@ describe("getGovernanceConfig (repo-spec)", () => {
+   });
+ 
+   it("rejects schedule with cron too short", async () => {
+-    const yaml = [
+-      BASE_YAML,
+-      "governance:",
++    const yaml = buildGovernanceYaml([
+       "  schedules:",
+       "    - charter: GOVERN",
+       '      cron: "* *"',
+       "      entrypoint: GOVERN",
+-    ].join("\n");
++    ]);
+ 
+     const tmpDir = writeRepoSpec(yaml);
+     useTmpRoot(tmpDir);
+diff --git a/packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts b/packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts
+index e0aaa74e..6f452667 100644
+--- a/packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts
++++ b/packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts
+@@ -68,7 +68,7 @@ export interface PrivyOperatorWalletConfig {
+   expectedAddress: string;
+   /** Split contract address (from payments_in.credits_topup.receiving_address) */
+   splitAddress: string;
+-  /** DAO treasury address from repo-spec (cogni_dao.dao_contract) */
++  /** DAO treasury address from repo-spec (governance.dao_contract) */
+   treasuryAddress: string;
+   /** Billing markup factor in PPM (e.g., 2_000_000n for 2.0x) */
+   markupPpm: bigint;
+diff --git a/packages/repo-spec/AGENTS.md b/packages/repo-spec/AGENTS.md
+index 703414dd..13955cd8 100644
+--- a/packages/repo-spec/AGENTS.md
++++ b/packages/repo-spec/AGENTS.md
+@@ -44,13 +44,14 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
+   - `extractGovernanceConfig(spec)` — Maps governance schedules + ledger config
+   - `extractLedgerConfig(spec)` — Extracts ledger config (requires scope identity)
+   - `extractLedgerApprovers(spec)` — Lowercased EVM approver addresses
++  - `extractKnowledgeConfig(spec)` — Node-local knowledge DB + Cogni-owned DoltHub mirror declaration
+   - `extractNodeId(spec)` — Node identity UUID
+   - `extractNodes(spec)` — Node registry entries (operator-only, returns `[]` for non-operator specs)
+   - `extractNodePath(spec, nodeId)` — Resolve a node UUID to its registered relative path; returns `null` on miss (caller decides fallback)
+-  - `extractOwningNode(spec, paths)` — Paths → owning domain. Returns `single | conflict | miss`. Operator is a sovereign domain (catches `nodes/operator/**`, `packages/`, `.github/`, root configs); cross-domain mixing returns `conflict`. On `conflict`, the result also carries `operatorPaths` + `operatorNodeId` so downstream formatters can render the diagnostic without re-classifying. Bounded ride-along carve-out via `rideAlongApplied` flag (currently `pnpm-lock.yaml`, `work/**`, `docs/**`, `.claude/skills/poly-dev-manager/SKILL.md`, and exact single-node-scope policy maintenance files). Mirrors `tests/ci-invariants/classify.ts` per spec § Single-Domain Scope.
++  - `extractOwningNode(spec, paths)` — Paths → owning domain. Returns `single | conflict | miss`. Operator is a sovereign domain (catches `nodes/operator/**`, `packages/`, `.github/`, root configs); cross-domain mixing returns `conflict`. On `conflict`, the result also carries `operatorPaths` + `operatorNodeId` so downstream formatters can render the diagnostic without re-classifying. Bounded ride-along carve-out via `rideAlongApplied` flag (currently `pnpm-lock.yaml`, `work/**`, `docs/**`, `.claude/skills/poly-dev-manager/SKILL.md`, exact single-node-scope policy maintenance files, and the fast-check root app Vitest config exception). Mirrors `tests/ci-invariants/classify.ts` per spec § Single-Domain Scope.
+   - `resolveRulePath(owningNode)` — Single source of truth for "where do this domain's `.cogni/rules/` live." Returns `<owningNode.path>/.cogni/rules` for every `single`-kind result — operator and sovereign nodes alike, no special case. Throws on `conflict`/`miss`. Routing code (e.g. `fetchPrContextActivity`) calls this rather than building paths inline.
+   - `extractScopeId(spec)` — Scope identity UUID (throws if missing)
+-  - `extractChainId(spec)` — Numeric chain ID from cogni_dao section
++  - `extractChainId(spec)` — Numeric chain ID from governance section
+   - Zod schemas: `repoSpecSchema`, `nodeRegistryEntrySchema`, `creditsTopupSpecSchema`, `governanceScheduleSchema`, etc.
+   - Types: `RepoSpec`, `NodeRegistryEntry`, `InboundPaymentConfig`, `GovernanceConfig`, `GovernanceSchedule`, `LedgerConfig`, `LedgerPoolConfig`
+ - **Subpath `@cogni/repo-spec/testing`** — test-only fixtures; never imported from production code:
+diff --git a/packages/repo-spec/src/accessors.ts b/packages/repo-spec/src/accessors.ts
+index 41ec3f0c..4b43e578 100644
+--- a/packages/repo-spec/src/accessors.ts
++++ b/packages/repo-spec/src/accessors.ts
+@@ -12,11 +12,12 @@
+  */
+ 
+ import type {
+-	GateConfig,
+-	NodeRegistryEntry,
+-	OperatorWalletSpec,
+-	RepoSpec,
+-	StewardWalletSpec,
++  GateConfig,
++  KnowledgeSpec,
++  NodeRegistryEntry,
++  OperatorWalletSpec,
++  RepoSpec,
++  StewardWalletSpec,
+ } from "./schema.js";
+ 
+ // ---------------------------------------------------------------------------
+@@ -24,53 +25,88 @@ import type {
+ // ---------------------------------------------------------------------------
+ 
+ export interface GovernanceSchedule {
+-	charter: string;
+-	cron: string;
+-	timezone: string;
+-	entrypoint: string;
++  charter: string;
++  cron: string;
++  timezone: string;
++  entrypoint: string;
+ }
+ 
+ export interface LedgerPoolConfig {
+-	baseIssuanceCredits: bigint;
++  baseIssuanceCredits: bigint;
+ }
+ 
+ export interface LedgerConfig {
+-	scopeId: string;
+-	scopeKey: string;
+-	epochLengthDays: number;
+-	activitySources: Record<
+-		string,
+-		{
+-			attributionPipeline: string;
+-			sourceRefs: string[];
+-			excludedLogins?: string[];
+-		}
+-	>;
+-	poolConfig: LedgerPoolConfig;
+-	/** base_issuance_credits as string (bigint serialized) for schedule payload. */
+-	baseIssuanceCredits?: string;
+-	/** EVM approver addresses from repo-spec. */
+-	approvers?: string[];
++  scopeId: string;
++  scopeKey: string;
++  epochLengthDays: number;
++  activitySources: Record<
++    string,
++    {
++      attributionPipeline: string;
++      sourceRefs: string[];
++      excludedLogins?: string[];
++    }
++  >;
++  poolConfig: LedgerPoolConfig;
++  /** base_issuance_credits as string (bigint serialized) for schedule payload. */
++  baseIssuanceCredits?: string;
++  /** EVM approver addresses from repo-spec. */
++  approvers?: string[];
+ }
+ 
+ export interface GovernanceConfig {
+-	schedules: GovernanceSchedule[];
+-	ledger?: LedgerConfig;
++  schedules: GovernanceSchedule[];
++  ledger?: LedgerConfig;
+ }
+ 
+ export interface InboundPaymentConfig {
+-	chainId: number;
+-	receivingAddress: string;
+-	provider: string;
++  chainId: number;
++  receivingAddress: string;
++  provider: string;
++  /** Purchase-side markup multiplier (governance config; drives top-up + Split allocation). */
++  markupFactor: number;
++  /** System-tenant (DAO) bonus-credit fraction (0–1); 0 = no system-account credit increase. */
++  revenueShare: number;
+ }
+ 
++/**
++ * A node-facing schedule resolved against the repo-spec's OWN node identity.
++ *
++ * M8 (security): `nodeId` is operator-pinned to the repo-spec's own `node_id` here
++ * at extraction time — it is NOT free-text from the schedule entry. A repo-spec
++ * therefore cannot author a schedule for a foreign node; every resolved schedule
++ * carries the declaring node's identity. Downstream (syncNodeSchedules) treats
++ * `nodeId` as authoritative for routing + the workflowId (`node-task:{nodeId}:{id}`).
++ *
++ * `kind` is the *inferred* workflowType selector (route XOR graph) — there is no
++ * node-facing `target` enum; the operator vocabulary stays operator-side.
++ */
++export interface NodeScheduleConfig {
++  /** Stable schedule id (from the entry). */
++  id: string;
++  /** Operator-pinned node id — the repo-spec's own node_id (NOT free-text). */
++  nodeId: string;
++  cron: string;
++  timezone: string;
++  /** Inferred from which of route/graph is present. */
++  kind: "http-dispatch" | "graph";
++  /** Relative route on the node's own host — set iff kind === "http-dispatch". */
++  route?: string;
++  /** Graph id — set iff kind === "graph". */
++  graph?: string;
++  /** Opaque payload forwarded verbatim. */
++  payload: Record<string, unknown>;
++}
++
++export type KnowledgeConfig = KnowledgeSpec;
++
+ // ---------------------------------------------------------------------------
+ // Identity accessors
+ // ---------------------------------------------------------------------------
+ 
+ /** Extract node_id from parsed repo-spec. */
+ export function extractNodeId(spec: RepoSpec): string {
+-	return spec.node_id;
++  return spec.node_id;
+ }
+ 
+ /**
+@@ -78,32 +114,32 @@ export function extractNodeId(spec: RepoSpec): string {
+  * Falls back to `node_id` when `intent.name` is absent (pre-intent repo-specs).
+  */
+ export function extractNodeName(spec: RepoSpec): string {
+-	return spec.intent?.name ?? spec.node_id;
++  return spec.intent?.name ?? spec.node_id;
+ }
+ 
+ /** One-line node mission from `intent.mission`, or null when undeclared. */
+ export function extractNodeMission(spec: RepoSpec): string | null {
+-	return spec.intent?.mission ?? null;
++  return spec.intent?.mission ?? null;
+ }
+ 
+ /** Punchy ~5-word gallery/heading hook from `intent.hook`, or null when undeclared. */
+ export function extractNodeHook(spec: RepoSpec): string | null {
+-	return spec.intent?.hook ?? null;
++  return spec.intent?.hook ?? null;
+ }
+ 
+ /** Node's self-hosted brand thumbnail URL (e.g. its OG image) from `intent.brand.thumbnail`. */
+ export function extractNodeThumbnail(spec: RepoSpec): string | null {
+-	return spec.intent?.brand?.thumbnail ?? null;
++  return spec.intent?.brand?.thumbnail ?? null;
+ }
+ 
+ /** Monogram-tint brand color from `intent.brand.color`, or null when undeclared. */
+ export function extractNodeBrandColor(spec: RepoSpec): string | null {
+-	return spec.intent?.brand?.color ?? null;
++  return spec.intent?.brand?.color ?? null;
+ }
+ 
+ /** Lucide icon NAME (PascalCase, e.g. `Gamepad2`) for the node's brand mark from `intent.brand.icon`. */
+ export function extractNodeBrandIcon(spec: RepoSpec): string | null {
+-	return spec.intent?.brand?.icon ?? null;
++  return spec.intent?.brand?.icon ?? null;
+ }
+ 
+ /**
+@@ -111,29 +147,34 @@ export function extractNodeBrandIcon(spec: RepoSpec): string | null {
+  * Throws if scope_id is not present (required for ledger scope gating).
+  */
+ export function extractScopeId(spec: RepoSpec): string {
+-	if (!spec.scope_id) {
+-		throw new Error(
+-			"[repo-spec] Missing scope_id — required for ledger scope gating",
+-		);
+-	}
+-	return spec.scope_id;
++  if (!spec.scope_id) {
++    throw new Error(
++      "[repo-spec] Missing scope_id — required for ledger scope gating"
++    );
++  }
++  return spec.scope_id;
+ }
+ 
+ /**
+- * Extract numeric chain_id from cogni_dao section.
++ * Extract numeric chain_id from governance section.
+  * Handles both string and number representations from YAML.
+  */
+ export function extractChainId(spec: RepoSpec): number {
+-	const raw = spec.cogni_dao.chain_id;
+-	const chainId = typeof raw === "string" ? Number(raw) : raw;
++  const raw = spec.governance?.chain_id;
++  if (raw === undefined) {
++    throw new Error(
++      "[repo-spec] Missing governance.chain_id — required for on-chain operations"
++    );
++  }
++  const chainId = typeof raw === "string" ? Number(raw) : raw;
+ 
+-	if (!Number.isFinite(chainId)) {
+-		throw new Error(
+-			"[repo-spec] Invalid cogni_dao.chain_id; expected numeric chain ID",
+-		);
+-	}
++  if (!Number.isFinite(chainId)) {
++    throw new Error(
++      "[repo-spec] Invalid governance.chain_id; expected numeric chain ID"
++    );
++  }
+ 
+-	return chainId;
++  return chainId;
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -145,26 +186,28 @@ export function extractChainId(spec: RepoSpec): number {
+  * Chain ID is passed as parameter (not imported from app code) and validated against repo-spec's declared chain.
+  */
+ export function extractPaymentConfig(
+-	spec: RepoSpec,
+-	expectedChainId: number,
++  spec: RepoSpec,
++  expectedChainId: number
+ ): InboundPaymentConfig | undefined {
+-	if (!spec.payments_in?.credits_topup) return undefined;
++  if (!spec.payments_in?.credits_topup) return undefined;
+ 
+-	const chainId = extractChainId(spec);
++  const chainId = extractChainId(spec);
+ 
+-	if (chainId !== expectedChainId) {
+-		throw new Error(
+-			`[repo-spec] Chain mismatch: repo-spec declares ${chainId}, app requires ${expectedChainId}`,
+-		);
+-	}
++  if (chainId !== expectedChainId) {
++    throw new Error(
++      `[repo-spec] Chain mismatch: repo-spec declares ${chainId}, app requires ${expectedChainId}`
++    );
++  }
+ 
+-	const topup = spec.payments_in.credits_topup;
++  const topup = spec.payments_in.credits_topup;
+ 
+-	return {
+-		chainId,
+-		receivingAddress: topup.receiving_address.trim(),
+-		provider: topup.provider.trim(),
+-	};
++  return {
++    chainId,
++    receivingAddress: topup.receiving_address.trim(),
++    provider: topup.provider.trim(),
++    markupFactor: topup.markup_factor,
++    revenueShare: topup.revenue_share,
++  };
+ }
+ 
+ /** Charter that routes a schedule to CollectEpochWorkflow (epoch ingest/roll). */
+@@ -186,28 +229,56 @@ const LEDGER_INGEST_CRON = "0 0 * * *";
+  * declare or keep in sync with `epoch_length_days`.
+  */
+ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
+-	const declared = spec.governance?.schedules ?? [];
+-	const ledger = extractLedgerConfig(spec);
+-
+-	const schedules = [...declared];
+-	const hasLedgerSchedule = declared.some(
+-		(s) => s.charter.toUpperCase() === LEDGER_INGEST_CHARTER,
+-	);
+-	if (ledger && !hasLedgerSchedule) {
+-		schedules.push({
+-			charter: LEDGER_INGEST_CHARTER,
+-			cron: LEDGER_INGEST_CRON,
+-			timezone: "UTC",
+-			entrypoint: LEDGER_INGEST_CHARTER,
+-		});
+-	}
+-
+-	const config: GovernanceConfig = { schedules };
+-	if (ledger) {
+-		config.ledger = ledger;
+-	}
+-
+-	return config;
++  const declared = spec.governance?.schedules ?? [];
++  const ledger = extractLedgerConfig(spec);
++
++  const schedules = [...declared];
++  const hasLedgerSchedule = declared.some(
++    (s) => s.charter.toUpperCase() === LEDGER_INGEST_CHARTER
++  );
++  if (ledger && !hasLedgerSchedule) {
++    schedules.push({
++      charter: LEDGER_INGEST_CHARTER,
++      cron: LEDGER_INGEST_CRON,
++      timezone: "UTC",
++      entrypoint: LEDGER_INGEST_CHARTER,
++    });
++  }
++
++  const config: GovernanceConfig = { schedules };
++  if (ledger) {
++    config.ledger = ledger;
++  }
++
++  return config;
++}
++
++/**
++ * Extract node-facing recurring-work schedules, each pinned to this repo-spec's
++ * OWN node identity (M8). The returned `nodeId` is `spec.node_id`, never anything
++ * declared inside a schedule entry — so a repo-spec is structurally incapable of
++ * producing a schedule for a foreign node.
++ *
++ * `kind` (the workflowType selector) is inferred from route XOR graph; the schema
++ * already guarantees exactly one is present, so this is a pure mapping.
++ */
++export function extractNodeSchedules(spec: RepoSpec): NodeScheduleConfig[] {
++  const ownNodeId = spec.node_id;
++  const declared = spec.schedules ?? [];
++  return declared.map((entry) => {
++    const kind: "http-dispatch" | "graph" =
++      entry.route !== undefined ? "http-dispatch" : "graph";
++    return {
++      id: entry.id,
++      nodeId: ownNodeId,
++      cron: entry.cron,
++      timezone: entry.timezone,
++      kind,
++      ...(entry.route !== undefined ? { route: entry.route } : {}),
++      ...(entry.graph !== undefined ? { graph: entry.graph } : {}),
++      payload: entry.payload,
++    };
++  });
+ }
+ 
+ /**
+@@ -215,37 +286,37 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
+  * Returns null if activity_ledger or scope identity (scope_id + scope_key) is missing.
+  */
+ export function extractLedgerConfig(spec: RepoSpec): LedgerConfig | null {
+-	if (!spec.activity_ledger || !spec.scope_id || !spec.scope_key) {
+-		return null;
+-	}
+-
+-	const sources: LedgerConfig["activitySources"] = {};
+-	for (const [name, src] of Object.entries(
+-		spec.activity_ledger.activity_sources,
+-	)) {
+-		sources[name] = {
+-			attributionPipeline: src.attribution_pipeline,
+-			sourceRefs: src.source_refs,
+-			excludedLogins: src.excluded_logins,
+-		};
+-	}
+-
+-	const poolCfg = spec.activity_ledger.pool_config;
+-	const baseIssuanceCredits = poolCfg
+-		? BigInt(poolCfg.base_issuance_credits)
+-		: 0n;
+-
+-	return {
+-		scopeId: spec.scope_id,
+-		scopeKey: spec.scope_key,
+-		epochLengthDays: spec.activity_ledger.epoch_length_days,
+-		activitySources: sources,
+-		poolConfig: {
+-			baseIssuanceCredits,
+-		},
+-		baseIssuanceCredits: baseIssuanceCredits.toString(),
+-		approvers: spec.activity_ledger.approvers,
+-	};
++  if (!spec.activity_ledger || !spec.scope_id || !spec.scope_key) {
++    return null;
++  }
++
++  const sources: LedgerConfig["activitySources"] = {};
++  for (const [name, src] of Object.entries(
++    spec.activity_ledger.activity_sources
++  )) {
++    sources[name] = {
++      attributionPipeline: src.attribution_pipeline,
++      sourceRefs: src.source_refs,
++      excludedLogins: src.excluded_logins,
++    };
++  }
++
++  const poolCfg = spec.activity_ledger.pool_config;
++  const baseIssuanceCredits = poolCfg
++    ? BigInt(poolCfg.base_issuance_credits)
++    : 0n;
++
++  return {
++    scopeId: spec.scope_id,
++    scopeKey: spec.scope_key,
++    epochLengthDays: spec.activity_ledger.epoch_length_days,
++    activitySources: sources,
++    poolConfig: {
++      baseIssuanceCredits,
++    },
++    baseIssuanceCredits: baseIssuanceCredits.toString(),
++    approvers: spec.activity_ledger.approvers,
++  };
+ }
+ 
+ /**
+@@ -254,7 +325,7 @@ export function extractLedgerConfig(spec: RepoSpec): LedgerConfig | null {
+  * Returns empty array if ledger config is not present.
+  */
+ export function extractLedgerApprovers(spec: RepoSpec): string[] {
+-	return (spec.activity_ledger?.approvers ?? []).map((a) => a.toLowerCase());
++  return (spec.activity_ledger?.approvers ?? []).map((a) => a.toLowerCase());
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -262,8 +333,8 @@ export function extractLedgerApprovers(spec: RepoSpec): string[] {
+ // ---------------------------------------------------------------------------
+ 
+ export interface GatesConfig {
+-	gates: GateConfig[];
+-	failOnError: boolean;
++  gates: GateConfig[];
++  failOnError: boolean;
+ }
+ 
+ /**
+@@ -271,10 +342,29 @@ export interface GatesConfig {
+  * Returns empty gates array if no gates are configured.
+  */
+ export function extractGatesConfig(spec: RepoSpec): GatesConfig {
+-	return {
+-		gates: spec.gates ?? [],
+-		failOnError: spec.fail_on_error ?? false,
+-	};
++  return {
++    gates: spec.gates ?? [],
++    failOnError: spec.fail_on_error ?? false,
++  };
++}
++
++export interface ReviewConfig {
++  /** Whether the operator runs PR review for this node. */
++  enabled: boolean;
++  /** Platform model id for the pr-review graph; undefined → operator default. */
++  model?: string;
++}
++
++/**
++ * Extract PR review on/off + model from parsed repo-spec.
++ * Backward-compatible: a spec with no `review:` block defaults to enabled (review
++ * was historically always-on), with no model override (operator default applies).
++ */
++export function extractReviewConfig(spec: RepoSpec): ReviewConfig {
++  return {
++    enabled: spec.review?.enabled ?? true,
++    ...(spec.review?.model ? { model: spec.review.model } : {}),
++  };
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -282,38 +372,40 @@ export function extractGatesConfig(spec: RepoSpec): GatesConfig {
+ // ---------------------------------------------------------------------------
+ 
+ export interface DaoConfig {
+-	readonly dao_contract: string;
+-	readonly plugin_contract: string;
+-	readonly signal_contract: string;
+-	readonly chain_id: string;
+-	readonly base_url: string;
++  readonly dao_contract: string;
++  readonly plugin_contract: string;
++  readonly signal_contract: string;
++  readonly chain_id: string;
++  /** Governance proposal-UI host for `/propose/merge` deep-links. Optional: its
++   * absence omits the link but never blanks treasury/governance reads. */
++  readonly base_url?: string;
+ }
+ 
+ /**
+  * Extract DAO governance configuration from parsed repo-spec.
+- * Returns null if cogni_dao is missing or any required field is absent.
+- * All five fields (dao_contract, plugin_contract, signal_contract, chain_id, base_url)
+- * must be present for the config to be valid.
++ * Returns null only if the on-chain identity (dao_contract, plugin_contract,
++ * signal_contract, chain_id) is incomplete. `base_url` is the governance-UI
++ * deep-link host only — it gates nothing but the proposal link, so it is NOT
++ * required here (see review-handler / treasury, which never read it).
+  */
+ export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
+-	const dao = spec.cogni_dao;
+-	if (
+-		!dao?.dao_contract ||
+-		!dao.plugin_contract ||
+-		!dao.signal_contract ||
+-		!dao.chain_id ||
+-		!dao.base_url
+-	) {
+-		return null;
+-	}
+-
+-	return {
+-		dao_contract: dao.dao_contract,
+-		plugin_contract: dao.plugin_contract,
+-		signal_contract: dao.signal_contract,
+-		chain_id: String(dao.chain_id),
+-		base_url: dao.base_url,
+-	};
++  const dao = spec.governance;
++  if (
++    !dao?.dao_contract ||
++    !dao.plugin_contract ||
++    !dao.signal_contract ||
++    !dao.chain_id
++  ) {
++    return null;
++  }
++
++  return {
++    dao_contract: dao.dao_contract,
++    plugin_contract: dao.plugin_contract,
++    signal_contract: dao.signal_contract,
++    chain_id: String(dao.chain_id),
++    ...(dao.base_url ? { base_url: dao.base_url } : {}),
++  };
+ }
+ 
+ /**
+@@ -321,9 +413,17 @@ export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
+  * Returns undefined if operator_wallet section is not present.
+  */
+ export function extractOperatorWalletConfig(
+-	spec: RepoSpec,
++  spec: RepoSpec
+ ): OperatorWalletSpec | undefined {
+-	return spec.operator_wallet;
++  return spec.operator_wallet;
++}
++
++/**
++ * Extract DAO treasury address from repo-spec.
++ * Returns undefined if governance.dao_contract is not present.
++ */
++export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
++  return spec.governance.dao_contract;
+ }
+ 
+ /**
+@@ -333,17 +433,19 @@ export function extractOperatorWalletConfig(
+  * Returns undefined if payments_out is not present.
+  */
+ export function extractStewardWalletConfig(
+-	spec: RepoSpec,
++  spec: RepoSpec
+ ): StewardWalletSpec | undefined {
+-	return spec.payments_out?.steward_wallet;
++  return spec.payments_out?.steward_wallet;
+ }
+ 
+ /**
+- * Extract DAO treasury address from repo-spec.
+- * Returns undefined if cogni_dao.dao_contract is not present.
++ * Extract node-local knowledge plane config from repo-spec.
++ * Returns undefined for pre-knowledge nodes.
+  */
+-export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
+-	return spec.cogni_dao.dao_contract;
++export function extractKnowledgeConfig(
++  spec: RepoSpec
++): KnowledgeConfig | undefined {
++  return spec.knowledge;
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -355,7 +457,7 @@ export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
+  * Returns empty array if nodes[] is not present (non-operator repo-specs).
+  */
+ export function extractNodes(spec: RepoSpec): readonly NodeRegistryEntry[] {
+-	return spec.nodes ?? [];
++  return spec.nodes ?? [];
+ }
+ 
+ /**
+@@ -372,8 +474,8 @@ export function extractNodes(spec: RepoSpec): readonly NodeRegistryEntry[] {
+  * root (e.g., reject paths containing "..", absolute paths, or null bytes).
+  */
+ export function extractNodePath(spec: RepoSpec, nodeId: string): string | null {
+-	const entry = (spec.nodes ?? []).find((n) => n.node_id === nodeId);
+-	return entry?.path ?? null;
++  const entry = (spec.nodes ?? []).find((n) => n.node_id === nodeId);
++  return entry?.path ?? null;
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -397,27 +499,27 @@ export function extractNodePath(spec: RepoSpec, nodeId: string): string | null {
+  * locked by `tests/ci-invariants/single-node-scope-parity.spec.ts`.
+  */
+ export type OwningNode =
+-	| {
+-			kind: "single";
+-			nodeId: string;
+-			path: string;
+-			rideAlongApplied?: true;
+-	  }
+-	| {
+-			kind: "conflict";
+-			nodes: ReadonlyArray<{ nodeId: string; path: string }>;
+-			/**
+-			 * Operator-territory paths in the changed-file set, populated when the
+-			 * operator node is one of the conflicting domains. Empty array when
+-			 * operator is not involved in the conflict. Lets the diagnostic-comment
+-			 * formatter show contributors which paths triggered the operator domain
+-			 * match — see docs/spec/node-ci-cd-contract.md § Diagnostic contract.
+-			 */
+-			operatorPaths: readonly string[];
+-			/** nodeId of the operator entry when operator is one of the conflicting domains, else undefined. */
+-			operatorNodeId?: string;
+-	  }
+-	| { kind: "miss" };
++  | {
++      kind: "single";
++      nodeId: string;
++      path: string;
++      rideAlongApplied?: true;
++    }
++  | {
++      kind: "conflict";
++      nodes: ReadonlyArray<{ nodeId: string; path: string }>;
++      /**
++       * Operator-territory paths in the changed-file set, populated when the
++       * operator node is one of the conflicting domains. Empty array when
++       * operator is not involved in the conflict. Lets the diagnostic-comment
++       * formatter show contributors which paths triggered the operator domain
++       * match — see docs/spec/node-ci-cd-contract.md § Diagnostic contract.
++       */
++      operatorPaths: readonly string[];
++      /** nodeId of the operator entry when operator is one of the conflicting domains, else undefined. */
++      operatorNodeId?: string;
++    }
++  | { kind: "miss" };
+ 
+ const OPERATOR_TOP = "operator";
+ const NODES_PREFIX = "nodes/";
+@@ -438,64 +540,99 @@ const NODES_PREFIX = "nodes/";
+  *   with the implementing code.
+  * - Exact single-node-scope policy maintenance files: the workflow gate,
+  *   reference classifier, repo-spec resolver, parity fixtures, and narrow tests.
++ * - Exact fast-check devtools files: app Vitest source-resolution is repo
++ *   tooling, but some legacy in-tree app config entrypoints are duplicated.
+  */
+ const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
+-	(p) => p === "pnpm-lock.yaml",
+-	(p) => p.startsWith("work/"),
+-	(p) => p.startsWith("docs/"),
+-	(p) => p.startsWith(".claude/skills/"),
+-	(p) => p === ".github/workflows/ci.yaml",
+-	(p) => p === "packages/repo-spec/AGENTS.md",
+-	(p) => p === "packages/repo-spec/src/accessors.ts",
+-	(p) => p === "tests/ci-invariants/classify.ts",
+-	(p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
+-	(p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
+-	(p) => p === "tests/unit/packages/repo-spec/accessors.test.ts",
++  (p) => p === "pnpm-lock.yaml",
++  (p) => p.startsWith("work/"),
++  (p) => p.startsWith("docs/"),
++  (p) => p.startsWith(".claude/skills/"),
++  (p) => p === ".github/workflows/ci.yaml",
++  (p) => p === "packages/repo-spec/AGENTS.md",
++  (p) => p === "packages/repo-spec/src/accessors.ts",
++  (p) => p === "tests/ci-invariants/classify.ts",
++  (p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
++  (p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
++  (p) => p === "tests/unit/packages/repo-spec/accessors.test.ts",
+ ];
+ 
+ function isRideAlong(p: string): boolean {
+-	return RIDE_ALONG_PATTERNS.some((m) => m(p));
++  return RIDE_ALONG_PATTERNS.some((m) => m(p));
++}
++
++const DEVTOOLS_OPERATOR_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
++  (p) => p === ".github/workflows/ci.yaml",
++  (p) => p === "docs/guides/new-worktree-setup.md",
++  (p) => p === "nodes/operator/app/vitest.config.mts",
++  (p) => p === "packages/langgraph-graphs/vitest.config.ts",
++  (p) => p === "packages/repo-spec/AGENTS.md",
++  (p) => p === "packages/repo-spec/src/accessors.ts",
++  (p) => p === "scripts/AGENTS.md",
++  (p) => p === "scripts/check-fast.sh",
++  (p) => p === "scripts/run-scoped-package-build.mjs",
++  (p) => p.startsWith("scripts/vitest/"),
++  (p) => p === "scripts/worktree-check.sh",
++  (p) => p === "tests/ci-invariants/classify.ts",
++  (p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
++  (p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
++  (p) => p === "vitest.config.mts",
++];
++
++function isDevtoolsOperatorPath(path: string): boolean {
++  return DEVTOOLS_OPERATOR_PATTERNS.some((m) => m(path));
++}
++
++function isRootAppVitestConfig(
++  path: string,
++  nonOperatorByTop: Map<string, NodeRegistryEntry>
++): boolean {
++  const match = path.match(/^nodes\/([^/]+)\/app\/vitest\.config\.mts$/);
++  const node = match?.[1];
++  return Boolean(
++    node && node !== "node-template" && nonOperatorByTop.has(node)
++  );
+ }
+ 
+ /**
+- * NODE_BIRTH ride-along: a node may carry its OWN deploy wiring — the
++ * NODE_FORMATION ride-along: a node may carry its OWN deploy wiring — the
+  * operator-owned files that exist only to make `nodes/<node>/` deployable.
+  * Keep this in parity with `tests/ci-invariants/classify.ts` and the
+  * `single-node-scope` bash gate.
+  */
+ function isNodeWiring(path: string, node: string): boolean {
+-	if (node === "") return false;
+-	const overlayPrefix = "infra/k8s/overlays/";
+-	const argocdPrefix = "infra/k8s/argocd/";
+-	if (path.startsWith(overlayPrefix)) {
+-		const rest = path.slice(overlayPrefix.length);
+-		const slash = rest.indexOf("/");
+-		return slash > 0 && rest.slice(slash + 1).startsWith(`${node}/`);
+-	}
+-	if (path.startsWith(argocdPrefix)) {
+-		const file = path.slice(argocdPrefix.length);
+-		// Per-node AppSet `<env>-<node>-applicationset.yaml` belongs to THIS node
+-		// only (LANE_ISOLATION). Node-scoped, so a node PR cannot ride another
+-		// lane's AppSet — closes the shared-appset residual flagged in classify.ts.
+-		return (
+-			!file.includes("/") &&
+-			(file.endsWith(`-${node}-applicationset.yaml`) ||
+-				file.endsWith(`-${node}-applicationset.yml`))
+-		);
+-	}
+-	return (
+-		path === `infra/catalog/${node}.yaml` ||
+-		path === "infra/compose/edge/configs/Caddyfile.tmpl"
+-	);
++  if (node === "") return false;
++  const overlayPrefix = "infra/k8s/overlays/";
++  const argocdPrefix = "infra/k8s/argocd/";
++  if (path.startsWith(overlayPrefix)) {
++    const rest = path.slice(overlayPrefix.length);
++    const slash = rest.indexOf("/");
++    return slash > 0 && rest.slice(slash + 1).startsWith(`${node}/`);
++  }
++  if (path.startsWith(argocdPrefix)) {
++    const file = path.slice(argocdPrefix.length);
++    // Per-node AppSet `<env>-<node>-applicationset.yaml` belongs to THIS node
++    // only (LANE_ISOLATION). Node-scoped, so a node PR cannot ride another
++    // lane's AppSet — closes the shared-appset residual flagged in classify.ts.
++    return (
++      !file.includes("/") &&
++      (file.endsWith(`-${node}-applicationset.yaml`) ||
++        file.endsWith(`-${node}-applicationset.yml`))
++    );
++  }
++  return (
++    path === `infra/catalog/${node}.yaml` ||
++    path === "infra/compose/edge/configs/Caddyfile.tmpl"
++  );
+ }
+ 
+ /** Top-level segment under `nodes/`, or null if the path is not under `nodes/<x>/`. */
+ function topUnderNodes(p: string): string | null {
+-	if (!p.startsWith(NODES_PREFIX)) return null;
+-	const rest = p.slice(NODES_PREFIX.length);
+-	const slash = rest.indexOf("/");
+-	if (slash <= 0) return null;
+-	return rest.slice(0, slash);
++  if (!p.startsWith(NODES_PREFIX)) return null;
++  const rest = p.slice(NODES_PREFIX.length);
++  const slash = rest.indexOf("/");
++  if (slash <= 0) return null;
++  return rest.slice(0, slash);
+ }
+ 
+ /**
+@@ -524,98 +661,112 @@ function topUnderNodes(p: string): string | null {
+  * catches the underlying registry/filesystem drift; this function does not defend against it.
+  */
+ export function extractOwningNode(
+-	spec: RepoSpec,
+-	paths: readonly string[],
++  spec: RepoSpec,
++  paths: readonly string[]
+ ): OwningNode {
+-	if (paths.length === 0) return { kind: "miss" };
+-
+-	const registry = spec.nodes ?? [];
+-	const operatorEntry = registry.find(
+-		(e) => topUnderNodes(`${e.path}/`) === OPERATOR_TOP,
+-	);
+-
+-	// Index non-operator registry entries by their top-level segment under nodes/.
+-	const nonOperatorByTop = new Map<string, NodeRegistryEntry>();
+-	for (const e of registry) {
+-		if (e === operatorEntry) continue;
+-		const top = topUnderNodes(`${e.path}/`);
+-		if (top != null) nonOperatorByTop.set(top, e);
+-	}
+-
+-	const sovereigns = new Map<string, { nodeId: string; path: string }>();
+-	const operatorPaths: string[] = [];
+-
+-	for (const p of paths) {
+-		const top = topUnderNodes(p);
+-		const sov = top != null ? nonOperatorByTop.get(top) : undefined;
+-		if (sov) {
+-			sovereigns.set(sov.node_id, { nodeId: sov.node_id, path: sov.path });
+-		} else {
+-			operatorPaths.push(p);
+-		}
+-	}
+-
+-	// Ride-along exception: drop operator from a 2-domain {operator, X} diff
+-	// when EVERY operator-domain path matches the ride-along whitelist or X's
+-	// own deploy wiring.
+-	let rideAlongApplied = false;
+-	let operatorTouched = operatorPaths.length > 0;
+-	const [onlySovereign] = sovereigns.values();
+-	const sovereignTop =
+-		onlySovereign != null ? topUnderNodes(`${onlySovereign.path}/`) : null;
+-	if (
+-		sovereigns.size === 1 &&
+-		operatorPaths.length > 0 &&
+-		sovereignTop != null &&
+-		operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, sovereignTop))
+-	) {
+-		operatorTouched = false;
+-		rideAlongApplied = true;
+-	}
+-
+-	const totalDomains = sovereigns.size + (operatorTouched ? 1 : 0);
+-
+-	if (totalDomains === 1) {
+-		if (sovereigns.size === 1) {
+-			const [only] = sovereigns.values();
+-			const owner = only as { nodeId: string; path: string };
+-			return rideAlongApplied
+-				? {
+-						kind: "single",
+-						nodeId: owner.nodeId,
+-						path: owner.path,
+-						rideAlongApplied: true,
+-					}
+-				: { kind: "single", nodeId: owner.nodeId, path: owner.path };
+-		}
+-		// Operator-only PR. Requires the operator to be in the registry.
+-		if (!operatorEntry) {
+-			throw new Error(
+-				"[repo-spec] extractOwningNode: operator entry missing from nodes registry; meta-test invariant violated",
+-			);
+-		}
+-		return {
+-			kind: "single",
+-			nodeId: operatorEntry.node_id,
+-			path: operatorEntry.path,
+-		};
+-	}
+-
+-	// totalDomains >= 2 → conflict
+-	const all: Array<{ nodeId: string; path: string }> = [];
+-	if (operatorTouched && operatorEntry) {
+-		all.push({ nodeId: operatorEntry.node_id, path: operatorEntry.path });
+-	}
+-	for (const s of sovereigns.values()) all.push(s);
+-	all.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+-	return {
+-		kind: "conflict",
+-		nodes: all,
+-		operatorPaths: operatorTouched ? operatorPaths : [],
+-		...(operatorTouched && operatorEntry
+-			? { operatorNodeId: operatorEntry.node_id }
+-			: {}),
+-	};
++  if (paths.length === 0) return { kind: "miss" };
++
++  const registry = spec.nodes ?? [];
++  const operatorEntry = registry.find(
++    (e) => topUnderNodes(`${e.path}/`) === OPERATOR_TOP
++  );
++
++  // Index non-operator registry entries by their top-level segment under nodes/.
++  const nonOperatorByTop = new Map<string, NodeRegistryEntry>();
++  for (const e of registry) {
++    if (e === operatorEntry) continue;
++    const top = topUnderNodes(`${e.path}/`);
++    if (top != null) nonOperatorByTop.set(top, e);
++  }
++
++  const sovereigns = new Map<string, { nodeId: string; path: string }>();
++  const operatorPaths: string[] = [];
++  const nonOperatorPaths: string[] = [];
++
++  for (const p of paths) {
++    const top = topUnderNodes(p);
++    const sov = top != null ? nonOperatorByTop.get(top) : undefined;
++    if (sov) {
++      sovereigns.set(sov.node_id, { nodeId: sov.node_id, path: sov.path });
++      nonOperatorPaths.push(p);
++    } else {
++      operatorPaths.push(p);
++    }
++  }
++
++  // Ride-along exception: drop operator from a 2-domain {operator, X} diff
++  // when EVERY operator-domain path matches the ride-along whitelist or X's
++  // own deploy wiring.
++  let rideAlongApplied = false;
++  let operatorTouched = operatorPaths.length > 0;
++  const [onlySovereign] = sovereigns.values();
++  const sovereignTop =
++    onlySovereign != null ? topUnderNodes(`${onlySovereign.path}/`) : null;
++  if (
++    sovereigns.size === 1 &&
++    operatorPaths.length > 0 &&
++    sovereignTop != null &&
++    operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, sovereignTop))
++  ) {
++    operatorTouched = false;
++    rideAlongApplied = true;
++  }
++
++  if (
++    sovereigns.size > 0 &&
++    operatorPaths.length > 0 &&
++    nonOperatorPaths.every((p) => isRootAppVitestConfig(p, nonOperatorByTop)) &&
++    operatorPaths.every((p) => isDevtoolsOperatorPath(p))
++  ) {
++    sovereigns.clear();
++    operatorTouched = true;
++    rideAlongApplied = true;
++  }
++
++  const totalDomains = sovereigns.size + (operatorTouched ? 1 : 0);
++
++  if (totalDomains === 1) {
++    if (sovereigns.size === 1) {
++      const [only] = sovereigns.values();
++      const owner = only as { nodeId: string; path: string };
++      return rideAlongApplied
++        ? {
++            kind: "single",
++            nodeId: owner.nodeId,
++            path: owner.path,
++            rideAlongApplied: true,
++          }
++        : { kind: "single", nodeId: owner.nodeId, path: owner.path };
++    }
++    // Operator-only PR. Requires the operator to be in the registry.
++    if (!operatorEntry) {
++      throw new Error(
++        "[repo-spec] extractOwningNode: operator entry missing from nodes registry; meta-test invariant violated"
++      );
++    }
++    return {
++      kind: "single",
++      nodeId: operatorEntry.node_id,
++      path: operatorEntry.path,
++      ...(rideAlongApplied ? { rideAlongApplied: true } : {}),
++    };
++  }
++
++  // totalDomains >= 2 → conflict
++  const all: Array<{ nodeId: string; path: string }> = [];
++  if (operatorTouched && operatorEntry) {
++    all.push({ nodeId: operatorEntry.node_id, path: operatorEntry.path });
++  }
++  for (const s of sovereigns.values()) all.push(s);
++  all.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
++  return {
++    kind: "conflict",
++    nodes: all,
++    operatorPaths: operatorTouched ? operatorPaths : [],
++    ...(operatorTouched && operatorEntry
++      ? { operatorNodeId: operatorEntry.node_id }
++      : {}),
++  };
+ }
+ 
+ /**
+@@ -632,10 +783,10 @@ export function extractOwningNode(
+  * Throws on `conflict` / `miss` — callers should branch on `kind` first.
+  */
+ export function resolveRulePath(owningNode: OwningNode): string {
+-	if (owningNode.kind !== "single") {
+-		throw new Error(
+-			`[repo-spec] resolveRulePath: only valid for kind=single, got ${owningNode.kind}`,
+-		);
+-	}
+-	return `${owningNode.path}/.cogni/rules`;
++  if (owningNode.kind !== "single") {
++    throw new Error(
++      `[repo-spec] resolveRulePath: only valid for kind=single, got ${owningNode.kind}`
++    );
++  }
++  return `${owningNode.path}/.cogni/rules`;
+ }
+diff --git a/packages/repo-spec/src/index.ts b/packages/repo-spec/src/index.ts
+index 1173de5c..5e25971d 100644
+--- a/packages/repo-spec/src/index.ts
++++ b/packages/repo-spec/src/index.ts
+@@ -12,71 +12,87 @@
+  */
+ 
+ export {
+-	type DaoConfig,
+-	extractChainId,
+-	extractDaoConfig,
+-	extractDaoTreasuryAddress,
+-	extractGatesConfig,
+-	extractGovernanceConfig,
+-	extractLedgerApprovers,
+-	extractLedgerConfig,
+-	extractNodeBrandColor,
+-	extractNodeBrandIcon,
+-	extractNodeHook,
+-	extractNodeId,
+-	extractNodeMission,
+-	extractNodeName,
+-	extractNodePath,
+-	extractNodes,
+-	extractNodeThumbnail,
+-	extractOperatorWalletConfig,
+-	extractOwningNode,
+-	extractPaymentConfig,
+-	extractScopeId,
+-	extractStewardWalletConfig,
+-	type GatesConfig,
+-	type GovernanceConfig,
+-	type GovernanceSchedule,
+-	type InboundPaymentConfig,
+-	type LedgerConfig,
+-	type LedgerPoolConfig,
+-	type OwningNode,
+-	resolveRulePath,
++  type DaoConfig,
++  extractChainId,
++  extractDaoConfig,
++  extractDaoTreasuryAddress,
++  extractGatesConfig,
++  extractGovernanceConfig,
++  extractKnowledgeConfig,
++  extractLedgerApprovers,
++  extractLedgerConfig,
++  extractNodeBrandColor,
++  extractNodeBrandIcon,
++  extractNodeHook,
++  extractNodeId,
++  extractNodeMission,
++  extractNodeName,
++  extractNodePath,
++  extractNodeSchedules,
++  extractNodes,
++  extractNodeThumbnail,
++  extractOperatorWalletConfig,
++  extractOwningNode,
++  extractPaymentConfig,
++  extractReviewConfig,
++  extractScopeId,
++  extractStewardWalletConfig,
++  type GatesConfig,
++  type GovernanceConfig,
++  type GovernanceSchedule,
++  type InboundPaymentConfig,
++  type KnowledgeConfig,
++  type LedgerConfig,
++  type LedgerPoolConfig,
++  type NodeScheduleConfig,
++  type OwningNode,
++  type ReviewConfig,
++  resolveRulePath,
+ } from "./accessors.js";
+ export { parseRepoSpec } from "./parse.js";
+ export { parseRule } from "./rules.js";
+ export {
+-	type ActivityLedgerSpec,
+-	type ActivitySourceSpec,
+-	activityLedgerSpecSchema,
+-	activitySourceSpecSchema,
+-	aiRuleGateSchema,
+-	type CreditsTopupSpec,
+-	creditsTopupSpecSchema,
+-	type GateConfig,
+-	type GovernanceScheduleSpec,
+-	type GovernanceSpec,
+-	gateConfigSchema,
+-	gatesArraySchema,
+-	governanceScheduleSchema,
+-	governanceSpecSchema,
+-	type NodeRegistryEntry,
+-	nodeRegistryEntrySchema,
+-	type OperatorWalletSpec,
+-	operatorWalletSpecSchema,
+-	type PoolConfigSpec,
+-	poolConfigSpecSchema,
+-	type RepoSpec,
+-	type Rule,
+-	repoSpecSchema,
+-	reviewLimitsGateSchema,
+-	ruleSchema,
+-	type StewardWalletSpec,
+-	type SuccessCriteria,
+-	scopeIdSchema,
+-	scopeKeySchema,
+-	stewardWalletSpecSchema,
+-	successCriteriaSchema,
+-	type ThresholdCriterion,
+-	thresholdCriterionSchema,
++  type ActivityLedgerSpec,
++  type ActivitySourceSpec,
++  activityLedgerSpecSchema,
++  activitySourceSpecSchema,
++  aiRuleGateSchema,
++  type CreditsTopupSpec,
++  creditsTopupSpecSchema,
++  type GateConfig,
++  type GovernanceScheduleSpec,
++  type GovernanceSpec,
++  gateConfigSchema,
++  gatesArraySchema,
++  governanceScheduleSchema,
++  governanceSpecSchema,
++  type KnowledgeRemoteSpec,
++  type KnowledgeSpec,
++  knowledgeRemoteSpecSchema,
++  knowledgeSpecSchema,
++  type NodeRegistryEntry,
++  type NodeScheduleSpec,
++  type NodeSchedules,
++  nodeRegistryEntrySchema,
++  nodeScheduleSchema,
++  nodeSchedulesSchema,
++  type OperatorWalletSpec,
++  operatorWalletSpecSchema,
++  type PoolConfigSpec,
++  poolConfigSpecSchema,
++  type RepoSpec,
++  type ReviewConfig as ReviewConfigSpec,
++  type Rule,
++  repoSpecSchema,
++  reviewConfigSchema,
++  reviewLimitsGateSchema,
++  ruleSchema,
++  type StewardWalletSpec,
++  type SuccessCriteria,
++  scopeIdSchema,
++  scopeKeySchema,
++  stewardWalletSpecSchema,
++  successCriteriaSchema,
++  type ThresholdCriterion,
++  thresholdCriterionSchema,
+ } from "./schema.js";
+diff --git a/packages/repo-spec/src/schema.ts b/packages/repo-spec/src/schema.ts
+index 8bf3dfa8..9a6e476b 100644
+--- a/packages/repo-spec/src/schema.ts
++++ b/packages/repo-spec/src/schema.ts
+@@ -18,22 +18,37 @@ import { z } from "zod";
+  * Validates inbound payment settings structure.
+  */
+ export const creditsTopupSpecSchema = z.object({
+-	/** Payment provider identifier (e.g., "cogni-usdc-backend-v1") */
+-	provider: z.string().min(1, "Provider must be a non-empty string"),
+-
+-	/** EVM address receiving inbound payments (DAO wallet) */
+-	receiving_address: z
+-		.string()
+-		.regex(
+-			/^0x[a-fA-F0-9]{40}$/,
+-			"Receiving address must be a valid EVM address (0x + 40 hex chars)",
+-		),
+-
+-	/** Optional: Informational list of chain names (not enforced by schema) */
+-	allowed_chains: z.array(z.string()).optional(),
+-
+-	/** Optional: Informational list of token names (not enforced by schema) */
+-	allowed_tokens: z.array(z.string()).optional(),
++  /** Payment provider identifier (e.g., "cogni-usdc-backend-v1") */
++  provider: z.string().min(1, "Provider must be a non-empty string"),
++
++  /** EVM address receiving inbound payments (DAO wallet) */
++  receiving_address: z
++    .string()
++    .regex(
++      /^0x[a-fA-F0-9]{40}$/,
++      "Receiving address must be a valid EVM address (0x + 40 hex chars)"
++    ),
++
++  /** Optional: Informational list of chain names (not enforced by schema) */
++  allowed_chains: z.array(z.string()).optional(),
++
++  /** Optional: Informational list of token names (not enforced by schema) */
++  allowed_tokens: z.array(z.string()).optional(),
++
++  /**
++   * Purchase-side price markup multiplier (governance config; was env USER_PRICE_MARKUP_FACTOR).
++   * Drives the OpenRouter top-up amount and the 0xSplits allocation (DAO margin).
++   * Default is tuned for a 95% provider top-up / 5% DAO Split margin with a 5% provider fee:
++   * 1 / (0.95 top-up share × 0.95 fee complement). Distinct from spend-side LLM markup.
++   */
++  markup_factor: z.number().min(1.0).default(1.10803324099723),
++
++  /**
++   * Fraction of purchased credits minted as a system-tenant (DAO) bonus (0–1).
++   * Default 0 = no system-account credit increase (the DAO earns USDC margin via the
++   * Split, not free minted AI credits). New nodes inherit 0; a node opts back in explicitly.
++   */
++  revenue_share: z.number().min(0).max(1).default(0),
+ });
+ 
+ export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;
+@@ -44,52 +59,185 @@ export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;
+  * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces).
+  */
+ export const governanceScheduleSchema = z.object({
+-	/** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
+-	charter: z.string().min(1, "Charter must be non-empty"),
+-	/** 5-field cron expression (minute hour day month weekday) */
+-	cron: z
+-		.string()
+-		.regex(
+-			/^(\S+\s+){4}\S+$/,
+-			"Cron must be a 5-field expression (minute hour day month weekday)",
+-		),
+-	/** IANA timezone (defaults to UTC) */
+-	timezone: z.string().default("UTC"),
+-	/** Trigger word sent to the sandbox agent (single token, no spaces) */
+-	entrypoint: z
+-		.string()
+-		.regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
++  /** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
++  charter: z.string().min(1, "Charter must be non-empty"),
++  /** 5-field cron expression (minute hour day month weekday) */
++  cron: z
++    .string()
++    .regex(
++      /^(\S+\s+){4}\S+$/,
++      "Cron must be a 5-field expression (minute hour day month weekday)"
++    ),
++  /** IANA timezone (defaults to UTC) */
++  timezone: z.string().default("UTC"),
++  /** Trigger word sent to the sandbox agent (single token, no spaces) */
++  entrypoint: z
++    .string()
++    .regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
+ });
+ 
+ export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
+ 
+ /**
+- * Schema for the governance section of repo-spec.
+- * Optional — existing deployments without this section continue to work.
++ * Schema for the unified `governance` section of repo-spec — the node/scope's
++ * on-chain DAO identity (contracts + chain) AND its governance schedules.
++ * (identity-model.md `scope_id (1)──(1) dao_address`: each scope has one DAO; this
++ * is its governance binding.) All fields optional — a node without on-chain
++ * governance still validates; the DAO accessors return null when identity is incomplete.
+  */
+ export const governanceSpecSchema = z.object({
+-	schedules: z
+-		.array(governanceScheduleSchema)
+-		.default([])
+-		.refine(
+-			(arr) =>
+-				new Set(arr.map((s) => s.charter.toLowerCase())).size === arr.length,
+-			{ message: "Duplicate charter names in governance.schedules" },
+-		),
++  /** Chain ID as string or number (YAML flexibility); normalized to string. */
++  chain_id: z
++    .union([z.string(), z.number()])
++    .transform((v) => String(v))
++    .optional(),
++  /** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
++  dao_contract: z
++    .string()
++    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
++    .optional(),
++  /** Aragon voting plugin contract address */
++  plugin_contract: z
++    .string()
++    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
++    .optional(),
++  /** CogniSignal contract address */
++  signal_contract: z
++    .string()
++    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
++    .optional(),
++  /** Proposal launcher base URL (for deep links) */
++  base_url: z.string().url().optional(),
++  /** Governance council schedules (cron-triggered charters) */
++  schedules: z
++    .array(governanceScheduleSchema)
++    .default([])
++    .refine(
++      (arr) =>
++        new Set(arr.map((s) => s.charter.toLowerCase())).size === arr.length,
++      { message: "Duplicate charter names in governance.schedules" }
++    ),
+ });
+ 
+ export type GovernanceSpec = z.infer<typeof governanceSpecSchema>;
+ 
++// ---------------------------------------------------------------------------
++// Node-facing recurring-work schedules (story.5008 / task.5030)
++// ---------------------------------------------------------------------------
++
++/**
++ * Schema for a single node-facing schedule entry.
++ *
++ * This is the left edge a node owns (CATALOG_IS_SSOT / node-baas "node declares
++ * shape, operator wires env"): a node declares a recurring job in its own
++ * repo-spec; the operator runs it on schedule under that node's tenant identity.
++ *
++ * Invariants (review G3 — node↔Temporal tenant interface):
++ *   - WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH: exactly one of `route` (http-dispatch →
++ *     NodeTaskWorkflow) or `graph` (graph run → GraphRunWorkflow) is set. There is
++ *     NO node-facing `target` enum — that is operator vocabulary; the workflowType
++ *     is *inferred* from which field is present (route XOR graph).
++ *   - PLATFORM_OVERLAP_AND_CATCHUP: `overlap`/`catchupWindow` are NOT node-facing.
++ *     They are platform invariants the operator fixes (OVERLAP_SKIP_DEFAULT /
++ *     CATCHUP_WINDOW_ZERO). The schema does not accept them — a node cannot tune them.
++ *   - ROUTE_IS_RELATIVE: `route` is a relative path on the node's own resolved host
++ *     (operator allow-lists it to the node's nodeUrl — never an absolute/foreign URL).
++ *   - PAYLOAD_OPAQUE: `payload` is opaque to the operator; the node's route owns its
++ *     meaning. The operator forwards it verbatim inside the NodeTaskInput envelope.
++ *   - `id` is stable → it derives both the scheduleId and the Temporal workflowId
++ *     (`node-task:{node}:{id}` — WORKFLOW_ID_STABILITY).
++ */
++export const nodeScheduleSchema = z
++  .object({
++    /** Stable schedule id — derives scheduleId + workflowId. Lowercase kebab token. */
++    id: z
++      .string()
++      .regex(
++        /^[a-z][a-z0-9-]{0,63}$/,
++        "id must be a lowercase kebab token (max 64 chars)"
++      ),
++    /** 5-field cron expression (minute hour day month weekday) */
++    cron: z
++      .string()
++      .regex(
++        /^(\S+\s+){4}\S+$/,
++        "Cron must be a 5-field expression (minute hour day month weekday)"
++      ),
++    /** IANA timezone (defaults to UTC) */
++    timezone: z.string().default("UTC"),
++    /**
++     * Relative HTTP route on the node's OWN host (http-dispatch). The operator
++     * dispatches POST {nodeUrl}{route} under the node's tenant principal. Mutually
++     * exclusive with `graph`. Must be a leading-slash relative path (no host, no scheme).
++     */
++    route: z
++      .string()
++      .regex(
++        /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/,
++        "route must be a relative path beginning with '/' on the node's own host (no scheme/host)"
++      )
++      .optional(),
++    /** Graph id to execute (graph run → GraphRunWorkflow). Mutually exclusive with `route`. */
++    graph: z.string().min(1).optional(),
++    /**
++     * Opaque job payload forwarded verbatim to the node's route / graph input.
++     * The operator never interprets it; the node's handler owns its meaning.
++     */
++    payload: z.record(z.string(), z.unknown()).default({}),
++  })
++  .strict()
++  .superRefine((entry, ctx) => {
++    const hasRoute = entry.route !== undefined;
++    const hasGraph = entry.graph !== undefined;
++    // WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH — exactly one
++    if (hasRoute === hasGraph) {
++      ctx.addIssue({
++        code: "custom",
++        message:
++          "Exactly one of `route` (http-dispatch) or `graph` (graph run) must be set per schedule",
++      });
++    }
++    // ROUTE_IS_RELATIVE — reject anything that smells like an absolute/foreign URL
++    if (
++      hasRoute &&
++      entry.route &&
++      /^[a-z][a-z0-9+.-]*:\/\//i.test(entry.route)
++    ) {
++      ctx.addIssue({
++        code: "custom",
++        path: ["route"],
++        message:
++          "route must not be an absolute URL — relative path on the node's own host only",
++      });
++    }
++  });
++
++export type NodeScheduleSpec = z.infer<typeof nodeScheduleSchema>;
++
++/**
++ * Node-facing `schedules` block.
++ * Optional — existing deployments without recurring work continue to work.
++ * Duplicate ids are rejected (each id maps to one stable schedule/workflow).
++ */
++export const nodeSchedulesSchema = z
++  .array(nodeScheduleSchema)
++  .default([])
++  .refine((arr) => new Set(arr.map((s) => s.id)).size === arr.length, {
++    message: "Duplicate schedule ids in schedules[]",
++  });
++
++export type NodeSchedules = z.infer<typeof nodeSchedulesSchema>;
++
+ /**
+  * Schema for activity_ledger section — epoch and ingestion configuration.
+  */
+ export const activitySourceSpecSchema = z.object({
+-	/** Attribution pipeline profile ID (e.g., "cogni-v0.0") */
+-	attribution_pipeline: z.string().min(1),
+-	/** External namespaces for cursor scoping (e.g., repo slugs) */
+-	source_refs: z.array(z.string().min(1)).min(1),
+-	/** Platform logins to exclude from attribution (e.g., automation bots) */
+-	excluded_logins: z.array(z.string().min(1)).optional(),
++  /** Attribution pipeline profile ID (e.g., "cogni-v0.0") */
++  attribution_pipeline: z.string().min(1),
++  /** External namespaces for cursor scoping (e.g., repo slugs) */
++  source_refs: z.array(z.string().min(1)).min(1),
++  /** Platform logins to exclude from attribution (e.g., automation bots) */
++  excluded_logins: z.array(z.string().min(1)).optional(),
+ });
+ 
+ export type ActivitySourceSpec = z.infer<typeof activitySourceSpecSchema>;
+@@ -98,32 +246,32 @@ export type ActivitySourceSpec = z.infer<typeof activitySourceSpecSchema>;
+  * Schema for pool_config — governance-managed pool budget parameters.
+  */
+ export const poolConfigSpecSchema = z.object({
+-	/** Base issuance in credits (string → bigint). Governance-set budget per epoch. */
+-	base_issuance_credits: z
+-		.string()
+-		.min(1, "base_issuance_credits must be a non-empty string"),
++  /** Base issuance in credits (string → bigint). Governance-set budget per epoch. */
++  base_issuance_credits: z
++    .string()
++    .min(1, "base_issuance_credits must be a non-empty string"),
+ });
+ 
+ export type PoolConfigSpec = z.infer<typeof poolConfigSpecSchema>;
+ 
+ export const activityLedgerSpecSchema = z.object({
+-	/** Epoch length in days (1–90) */
+-	epoch_length_days: z.number().int().min(1).max(90),
+-	/** EVM addresses allowed to mutate ledger data (allocations, pool components) */
+-	approvers: z
+-		.array(
+-			z
+-				.string()
+-				.regex(
+-					/^0x[a-fA-F0-9]{40}$/,
+-					"Each approver must be a valid EVM address (0x + 40 hex chars)",
+-				),
+-		)
+-		.default([]),
+-	/** Map of source name → source config */
+-	activity_sources: z.record(z.string(), activitySourceSpecSchema),
+-	/** Pool budget configuration (optional — defaults to 0 base issuance if missing) */
+-	pool_config: poolConfigSpecSchema.optional(),
++  /** Epoch length in days (1–90) */
++  epoch_length_days: z.number().int().min(1).max(90),
++  /** EVM addresses allowed to mutate ledger data (allocations, pool components) */
++  approvers: z
++    .array(
++      z
++        .string()
++        .regex(
++          /^0x[a-fA-F0-9]{40}$/,
++          "Each approver must be a valid EVM address (0x + 40 hex chars)"
++        )
++    )
++    .default([]),
++  /** Map of source name → source config */
++  activity_sources: z.record(z.string(), activitySourceSpecSchema),
++  /** Pool budget configuration (optional — defaults to 0 base issuance if missing) */
++  pool_config: poolConfigSpecSchema.optional(),
+ });
+ 
+ export type ActivityLedgerSpec = z.infer<typeof activityLedgerSpecSchema>;
+@@ -135,13 +283,13 @@ export type ActivityLedgerSpec = z.infer<typeof activityLedgerSpecSchema>;
+  * (single source of truth for where user payments land).
+  */
+ export const operatorWalletSpecSchema = z.object({
+-	/** Checksummed EVM address of the Privy-managed operator wallet */
+-	address: z
+-		.string()
+-		.regex(
+-			/^0x[a-fA-F0-9]{40}$/,
+-			"Operator wallet address must be a valid EVM address (0x + 40 hex chars)",
+-		),
++  /** Checksummed EVM address of the Privy-managed operator wallet */
++  address: z
++    .string()
++    .regex(
++      /^0x[a-fA-F0-9]{40}$/,
++      "Operator wallet address must be a valid EVM address (0x + 40 hex chars)"
++    ),
+ });
+ 
+ export type OperatorWalletSpec = z.infer<typeof operatorWalletSpecSchema>;
+@@ -152,24 +300,83 @@ export type OperatorWalletSpec = z.infer<typeof operatorWalletSpecSchema>;
+  * The steward wallet is a HUMAN-CUSTODIED wallet (EOA / hardware wallet) that
+  * settles vendor invoices the operator wallet cannot pay programmatically —
+  * vendors whose crypto checkout is a per-session / per-invoice hosted flow
+- * (OpenRouter Coinbase Business Checkout). The operator Privy wallet funds this
+- * one pinned address via a single constrained transfer
+- * (OperatorWalletPort.withdrawToSteward); a human then completes the vendor
++ * (OpenRouter Coinbase Business Checkout; Cherry → Coingate). The operator
++ * Privy wallet funds this one pinned address via a single constrained transfer
++ * (OperatorWalletPort.withdrawToSteward); a human then completes each vendor
+  * checkout in USDC. Deliberately node-generic and NOT named "operator" to avoid
+  * overloading the operator node / operator wallet. See docs/design/node-steward-wallet.md.
+  */
+ export const stewardWalletSpecSchema = z.object({
+-	/** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */
+-	address: z
+-		.string()
+-		.regex(
+-			/^0x[a-fA-F0-9]{40}$/,
+-			"Steward wallet address must be a valid EVM address (0x + 40 hex chars)",
+-		),
++  /** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */
++  address: z
++    .string()
++    .regex(
++      /^0x[a-fA-F0-9]{40}$/,
++      "Steward wallet address must be a valid EVM address (0x + 40 hex chars)"
++    ),
+ });
+ 
+ export type StewardWalletSpec = z.infer<typeof stewardWalletSpecSchema>;
+ 
++function isDoltHubRemoteUrl(value: string): boolean {
++  try {
++    const url = new URL(value);
++    return (
++      url.protocol === "https:" &&
++      url.hostname === "doltremoteapi.dolthub.com" &&
++      url.username === "" &&
++      url.password === "" &&
++      url.search === "" &&
++      url.hash === "" &&
++      /^\/[^/]+\/[^/]+$/.test(url.pathname)
++    );
++  } catch {
++    return false;
++  }
++}
++
++/**
++ * Schema for the node-local knowledge plane declaration.
++ * Credentials are never stored here; the repo-spec only pins the Cogni-owned
++ * DoltHub repository identity that this node mirrors to.
++ */
++export const knowledgeRemoteSpecSchema = z
++  .object({
++    provider: z.literal("dolthub"),
++    owner: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/),
++    repo: z.string().regex(/^knowledge-[a-z][a-z0-9-]{0,63}$/),
++    url: z.string().refine(isDoltHubRemoteUrl, {
++      message:
++        "DoltHub remote URL must be https://doltremoteapi.dolthub.com/<owner>/<repo> with no credentials",
++    }),
++    custody: z.literal("cogni-owned"),
++  })
++  .superRefine((remote, ctx) => {
++    let url: URL;
++    try {
++      url = new URL(remote.url);
++    } catch {
++      return;
++    }
++    const expected = `/${remote.owner}/${remote.repo}`;
++    if (url.pathname !== expected) {
++      ctx.addIssue({
++        code: "custom",
++        path: ["url"],
++        message:
++          "DoltHub remote URL path must match knowledge.remote owner/repo",
++      });
++    }
++  });
++
++export const knowledgeSpecSchema = z.object({
++  database: z.string().regex(/^knowledge_[a-z][a-z0-9_]{0,63}$/),
++  remote: knowledgeRemoteSpecSchema,
++});
++
++export type KnowledgeRemoteSpec = z.infer<typeof knowledgeRemoteSpecSchema>;
++export type KnowledgeSpec = z.infer<typeof knowledgeSpecSchema>;
++
+ // ---------------------------------------------------------------------------
+ // Gate + rule schemas (PR review)
+ // ---------------------------------------------------------------------------
+@@ -179,33 +386,33 @@ export const comparisonOperators = ["gte", "gt", "lte", "lt", "eq"] as const;
+ 
+ /** A single threshold criterion (e.g., { metric: "coherent-change", gte: 0.8 }). */
+ export const thresholdCriterionSchema = z
+-	.object({
+-		metric: z.string().min(1),
+-	})
+-	.catchall(z.number().min(0).max(1))
+-	.refine(
+-		(obj) => {
+-			const ops = Object.keys(obj).filter((k) =>
+-				(comparisonOperators as readonly string[]).includes(k),
+-			);
+-			return ops.length === 1;
+-		},
+-		{
+-			message:
+-				"Exactly one comparison operator (gte, gt, lte, lt, eq) required per threshold",
+-		},
+-	);
++  .object({
++    metric: z.string().min(1),
++  })
++  .catchall(z.number().min(0).max(1))
++  .refine(
++    (obj) => {
++      const ops = Object.keys(obj).filter((k) =>
++        (comparisonOperators as readonly string[]).includes(k)
++      );
++      return ops.length === 1;
++    },
++    {
++      message:
++        "Exactly one comparison operator (gte, gt, lte, lt, eq) required per threshold",
++    }
++  );
+ 
+ export type ThresholdCriterion = z.infer<typeof thresholdCriterionSchema>;
+ 
+ /** Success criteria block from a rule YAML. */
+ export const successCriteriaSchema = z.object({
+-	/** If true, missing metrics result in neutral instead of fail. */
+-	neutral_on_missing_metrics: z.boolean().optional().default(false),
+-	/** All criteria must pass. */
+-	require: z.array(thresholdCriterionSchema).optional(),
+-	/** At least one criterion must pass. */
+-	any_of: z.array(thresholdCriterionSchema).optional(),
++  /** If true, missing metrics result in neutral instead of fail. */
++  neutral_on_missing_metrics: z.boolean().optional().default(false),
++  /** All criteria must pass. */
++  require: z.array(thresholdCriterionSchema).optional(),
++  /** At least one criterion must pass. */
++  any_of: z.array(thresholdCriterionSchema).optional(),
+ });
+ 
+ export type SuccessCriteria = z.infer<typeof successCriteriaSchema>;
+@@ -215,47 +422,47 @@ export type SuccessCriteria = z.infer<typeof successCriteriaSchema>;
+  * and value is the evaluation prompt text.
+  */
+ export const evaluationEntrySchema = z
+-	.record(z.string(), z.string())
+-	.refine((obj) => Object.keys(obj).length === 1, {
+-		message:
+-			"Each evaluation entry must have exactly one key (the metric name)",
+-	});
++  .record(z.string(), z.string())
++  .refine((obj) => Object.keys(obj).length === 1, {
++    message:
++      "Each evaluation entry must have exactly one key (the metric name)",
++  });
+ 
+ /** Rule YAML schema (e.g., .cogni/rules/pr-syntropy-coherence.yaml). */
+ export const ruleSchema = z.object({
+-	id: z.string().min(1),
+-	schema_version: z.string().optional(),
+-	blocking: z.boolean().optional().default(true),
+-	workflow_id: z.string().optional(),
+-	evaluations: z.array(evaluationEntrySchema).min(1),
+-	success_criteria: successCriteriaSchema,
++  id: z.string().min(1),
++  schema_version: z.string().optional(),
++  blocking: z.boolean().optional().default(true),
++  workflow_id: z.string().optional(),
++  evaluations: z.array(evaluationEntrySchema).min(1),
++  success_criteria: successCriteriaSchema,
+ });
+ 
+ export type Rule = z.infer<typeof ruleSchema>;
+ 
+ /** Gate config: review-limits (no LLM — pure numeric checks). */
+ export const reviewLimitsGateSchema = z.object({
+-	type: z.literal("review-limits"),
+-	id: z.string().optional(),
+-	with: z.object({
+-		max_changed_files: z.number().int().positive().optional(),
+-		max_total_diff_kb: z.number().positive().optional(),
+-	}),
++  type: z.literal("review-limits"),
++  id: z.string().optional(),
++  with: z.object({
++    max_changed_files: z.number().int().positive().optional(),
++    max_total_diff_kb: z.number().positive().optional(),
++  }),
+ });
+ 
+ /** Gate config: ai-rule (invokes LLM for rule evaluation). */
+ export const aiRuleGateSchema = z.object({
+-	type: z.literal("ai-rule"),
+-	id: z.string().optional(),
+-	with: z.object({
+-		rule_file: z.string().min(1),
+-	}),
++  type: z.literal("ai-rule"),
++  id: z.string().optional(),
++  with: z.object({
++    rule_file: z.string().min(1),
++  }),
+ });
+ 
+ /** Union of all gate types. */
+ export const gateConfigSchema = z.discriminatedUnion("type", [
+-	reviewLimitsGateSchema,
+-	aiRuleGateSchema,
++  reviewLimitsGateSchema,
++  aiRuleGateSchema,
+ ]);
+ 
+ export type GateConfig = z.infer<typeof gateConfigSchema>;
+@@ -263,6 +470,23 @@ export type GateConfig = z.infer<typeof gateConfigSchema>;
+ /** Gates array schema. */
+ export const gatesArraySchema = z.array(gateConfigSchema);
+ 
++/**
++ * PR review configuration — the node-author-facing on/off + model toggle.
++ *
++ * The operator reviews a PR by reading the TARGET repo's own repo-spec, so this
++ * block makes git PR review 100% node-controlled (no operator-side hardcode):
++ *   - `enabled` — when `false`, the operator skips review entirely (no Check Run,
++ *     no comment). Defaults to `true` for backward-compat (review was always-on).
++ *   - `model` — platform model id (LiteLLM-resolvable, e.g. `gpt-4o-mini`) the
++ *     `pr-review` graph runs with. Omitted → operator default.
++ */
++export const reviewConfigSchema = z.object({
++  enabled: z.boolean().optional().default(true),
++  model: z.string().min(1).optional(),
++});
++
++export type ReviewConfig = z.infer<typeof reviewConfigSchema>;
++
+ // ---------------------------------------------------------------------------
+ // Scope identity primitives
+ // ---------------------------------------------------------------------------
+@@ -283,14 +507,14 @@ export const scopeKeySchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+  * Per REPO_SPEC_AUTHORITY: operator repo-spec is the node discovery source.
+  */
+ export const nodeRegistryEntrySchema = z.object({
+-	/** Node UUID — must match the node's own repo-spec node_id */
+-	node_id: z.string().uuid(),
+-	/** Human-friendly display name (for logging, UI, dashboards) */
+-	node_name: z.string().min(1),
+-	/** Path relative to repo root (e.g., "." for operator, "nodes/poly" for poly) */
+-	path: z.string().min(1),
+-	/** Docker-internal endpoint for billing callback routing (optional — runtime config) */
+-	endpoint: z.string().optional(),
++  /** Node UUID — must match the node's own repo-spec node_id */
++  node_id: z.string().uuid(),
++  /** Human-friendly display name (for logging, UI, dashboards) */
++  node_name: z.string().min(1),
++  /** Path relative to repo root (e.g., "nodes/operator" for operator, "nodes/<slug>" for a child) */
++  path: z.string().min(1),
++  /** Docker-internal endpoint for billing callback routing (optional — runtime config) */
++  endpoint: z.string().optional(),
+ });
+ 
+ export type NodeRegistryEntry = z.infer<typeof nodeRegistryEntrySchema>;
+@@ -300,120 +524,115 @@ export type NodeRegistryEntry = z.infer<typeof nodeRegistryEntrySchema>;
+  * Validates structure only; chain alignment checked in accessors via chainId parameter.
+  */
+ export const repoSpecSchema = z
+-	.object({
+-		/** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
+-		node_id: z.string().uuid("node_id must be a valid UUID"),
+-
+-		/**
+-		 * Human-facing node identity (display, not a key) — the SSOT a node self-describes from. `name` is
+-		 * the node slug (e.g. `operator`, `beacon`). The display layers, all projected to the node's public
+-		 * `/.well-known/agent.json` so the operator reads them rather than hardcoding (IDENTITY_IS_REPO_SPEC_PROJECTION):
+-		 *   - `hook`    — punchy ~5-word tagline shown on gallery cards / node-page headings.
+-		 *   - `mission` — the 1–3 sentence north-star the cognition substrate surfaces at session start.
+-		 *   - `brand`   — visual identity: `thumbnail` is a URL the NODE hosts (e.g. its OG image) so brand
+-		 *     stays sovereign + current with no operator asset-hosting; `color` tints the monogram fallback.
+-		 * All optional for back-compat (a node with only `name` falls back to title-cased slug + monogram).
+-		 */
+-		intent: z
+-			.object({
+-				name: z.string().min(1),
+-				hook: z.string().min(1).max(80).optional(),
+-				mission: z.string().min(1).optional(),
+-				brand: z
+-					.object({
+-						// SSOT for the node's visual mark: a Lucide icon NAME (PascalCase, e.g. `Gamepad2`).
+-						// ONE field, every surface reads it — app header, gallery card, og:image, favicon — so
+-						// the icon is never hand-coded per-fork in AppHeader JSX again (that was the split-brain).
+-						icon: z.string().optional(),
+-						// `color` tints the brand mark (icon + monogram fallback).
+-						color: z.string().optional(),
+-						// Deprecated: a node-hosted image URL/path. Superseded by `icon` (which the node's
+-						// /opengraph-image route renders to a PNG). Kept optional for back-compat during migration.
+-						thumbnail: z.string().optional(),
+-					})
+-					.optional(),
+-			})
+-			.passthrough()
+-			.optional(),
+-
+-		/** Stable opaque scope UUID — DB FK, never changes. Optional for backward compat. */
+-		scope_id: scopeIdSchema.optional(),
+-
+-		/** Human-friendly scope slug — for display, logs, schedule IDs. Optional for backward compat. */
+-		scope_key: scopeKeySchema.optional(),
+-
+-		/** Activity ledger configuration (optional — needed only when LEDGER_INGEST is enabled) */
+-		activity_ledger: activityLedgerSpecSchema.optional(),
+-
+-		/** Operator wallet configuration (optional — needed only when operator wallet is enabled) */
+-		operator_wallet: operatorWalletSpecSchema.optional(),
+-
+-		/** DAO governance configuration */
+-		cogni_dao: z.object({
+-			/**
+-			 * Chain ID as string or number (YAML flexibility).
+-			 * Normalized to string at extraction time.
+-			 */
+-			chain_id: z.union([z.string(), z.number()]).transform((v) => String(v)),
+-			/** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
+-			dao_contract: z
+-				.string()
+-				.regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+-				.optional(),
+-			/** Aragon voting plugin contract address */
+-			plugin_contract: z
+-				.string()
+-				.regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+-				.optional(),
+-			/** CogniSignal contract address */
+-			signal_contract: z
+-				.string()
+-				.regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+-				.optional(),
+-			/** Proposal launcher base URL (for deep links) */
+-			base_url: z.string().url().optional(),
+-		}),
+-
+-		/** Payment activation status — pending_activation until node:activate-payments completes */
+-		payments: z
+-			.object({
+-				status: z.enum(["pending_activation", "active"]),
+-			})
+-			.optional(),
+-
+-		/** Payment configuration (optional — populated by node:activate-payments) */
+-		payments_in: z
+-			.object({
+-				/** Inbound payment configuration for USDC credits top-up */
+-				credits_topup: creditsTopupSpecSchema,
+-			})
+-			.optional(),
+-
+-		/**
+-		 * Outbound payment configuration (optional). Declares the human-custodied
+-		 * steward wallet that settles vendor invoices via manual crypto checkout.
+-		 * Besides the 0xSplits distribute, this is the operator wallet's only
+-		 * outbound destination (a single pinned address, funded by withdrawToSteward).
+-		 */
+-		payments_out: z
+-			.object({
+-				/** Human-custodied wallet that settles vendor invoices (OpenRouter). */
+-				steward_wallet: stewardWalletSpecSchema,
+-			})
+-			.optional(),
+-
+-		/** Governance schedule configuration (optional — defaults to empty schedules) */
+-		governance: governanceSpecSchema.optional().default({ schedules: [] }),
+-
+-		/** PR review gate configuration (optional — gates run in declared order). */
+-		gates: gatesArraySchema.optional(),
+-
+-		/** Whether gate errors/timeouts result in failure instead of neutral. */
+-		fail_on_error: z.boolean().optional().default(false),
+-
+-		/** Node registry — operator-only. Declares child nodes in the monorepo. */
+-		nodes: z.array(nodeRegistryEntrySchema).optional(),
+-	})
+-	.passthrough();
++  .object({
++    /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
++    node_id: z.string().uuid("node_id must be a valid UUID"),
++
++    /**
++     * Human-facing node identity (display, not a key) — the SSOT a node self-describes from. `name` is
++     * the node slug (e.g. `operator`, `beacon`). The display layers, all projected to the node's public
++     * `/.well-known/agent.json` so the operator reads them rather than hardcoding (IDENTITY_IS_REPO_SPEC_PROJECTION):
++     *   - `hook`    — punchy ~5-word tagline shown on gallery cards / node-page headings.
++     *   - `mission` — the 1–3 sentence north-star the cognition substrate surfaces at session start.
++     *   - `brand`   — visual identity: `thumbnail` is a URL the NODE hosts (e.g. its OG image) so brand
++     *     stays sovereign + current with no operator asset-hosting; `color` tints the monogram fallback.
++     * All optional for back-compat (a node with only `name` falls back to title-cased slug + monogram).
++     */
++    intent: z
++      .object({
++        name: z.string().min(1),
++        hook: z.string().min(1).max(80).optional(),
++        mission: z.string().min(1).optional(),
++        brand: z
++          .object({
++            // SSOT for the node's visual mark: a Lucide icon NAME (PascalCase, e.g. `Gamepad2`).
++            // ONE field, every surface reads it — app header, gallery card, og:image, favicon — so
++            // the icon is never hand-coded per-fork in AppHeader JSX again (that was the split-brain).
++            icon: z.string().optional(),
++            // `color` tints the brand mark (icon + monogram fallback).
++            color: z.string().optional(),
++            // Deprecated: a node-hosted image URL/path. Superseded by `icon` (which the node's
++            // /opengraph-image route renders to a PNG). Kept optional for back-compat during migration.
++            thumbnail: z.string().optional(),
++          })
++          .optional(),
++      })
++      .passthrough()
++      .optional(),
++
++    /** Stable opaque scope UUID — DB FK, never changes. Optional for backward compat. */
++    scope_id: scopeIdSchema.optional(),
++
++    /** Human-friendly scope slug — for display, logs, schedule IDs. Optional for backward compat. */
++    scope_key: scopeKeySchema.optional(),
++
++    /** Activity ledger configuration (optional — needed only when LEDGER_INGEST is enabled) */
++    activity_ledger: activityLedgerSpecSchema.optional(),
++
++    /** Operator wallet configuration (optional — needed only when operator wallet is enabled) */
++    operator_wallet: operatorWalletSpecSchema.optional(),
++
++    /** Node-local knowledge plane declaration (optional for pre-knowledge nodes) */
++    knowledge: knowledgeSpecSchema.optional(),
++
++    /** Payment activation status — pending_activation until node:activate-payments completes */
++    payments: z
++      .object({
++        status: z.enum(["pending_activation", "active"]),
++      })
++      .optional(),
++
++    /** Payment configuration (optional — populated by node:activate-payments) */
++    payments_in: z
++      .object({
++        /** Inbound payment configuration for USDC credits top-up */
++        credits_topup: creditsTopupSpecSchema,
++      })
++      .optional(),
++
++    /**
++     * Outbound payment configuration (optional). Declares the human-custodied
++     * steward wallet that settles vendor invoices via manual crypto checkout.
++     * Besides the 0xSplits distribute, this is the operator wallet's only
++     * outbound destination (a single pinned address, funded by withdrawToSteward).
++     */
++    payments_out: z
++      .object({
++        /** Human-custodied wallet that settles vendor invoices (OpenRouter, Cherry). */
++        steward_wallet: stewardWalletSpecSchema,
++      })
++      .optional(),
++
++    /** Governance schedule configuration (optional — defaults to empty schedules) */
++    /**
++     * Unified governance section — DAO identity (contracts + chain) + council
++     * schedules. Required (every node declares its governance binding); inner
++     * fields optional so DAO identity can be incomplete pre-activation, and
++     * `schedules` defaults to [].
++     */
++    governance: governanceSpecSchema,
++
++    /**
++     * Node-facing recurring-work schedules (story.5008). The node declares
++     * recurring jobs; the operator reconciles them into Temporal Schedules under
++     * the node's tenant identity (see syncNodeSchedules). Optional — defaults to
++     * empty. Distinct from `governance.schedules` (operator charters): this is the
++     * node-author-facing contract (route XOR graph; no operator vocab leak).
++     */
++    schedules: nodeSchedulesSchema.optional().default([]),
++
++    /** PR review on/off + model selection (optional — defaults to enabled). */
++    review: reviewConfigSchema.optional(),
++
++    /** PR review gate configuration (optional — gates run in declared order). */
++    gates: gatesArraySchema.optional(),
++
++    /** Whether gate errors/timeouts result in failure instead of neutral. */
++    fail_on_error: z.boolean().optional().default(false),
++
++    /** Node registry — operator-only. Declares child nodes in the monorepo. */
++    nodes: z.array(nodeRegistryEntrySchema).optional(),
++  })
++  .passthrough();
+ 
+ export type RepoSpec = z.infer<typeof repoSpecSchema>;
+diff --git a/packages/repo-spec/src/testing.ts b/packages/repo-spec/src/testing.ts
+index c0d2fca7..538434b4 100644
+--- a/packages/repo-spec/src/testing.ts
++++ b/packages/repo-spec/src/testing.ts
+@@ -75,11 +75,11 @@ export const TEST_NODE_ENTRIES = {
+ 
+ /**
+  * Build a parsed `RepoSpec` from minimal-valid inputs plus arbitrary overrides.
+- * Replaces the ad-hoc `parseRepoSpec({ node_id: ..., cogni_dao: { ... }, ... })`
++ * Replaces the ad-hoc `parseRepoSpec({ node_id: ..., governance: { ... }, ... })`
+  * pattern duplicated across `tests/unit/packages/repo-spec/*.test.ts` and any
+  * test that needs a `RepoSpec` fixture.
+  *
+- * The default fixture has `node_id`, `cogni_dao.chain_id`, and `payments_in.credits_topup`
++ * The default fixture has `node_id`, `governance.chain_id`, and `payments_in.credits_topup`
+  * set — enough to satisfy `parseRepoSpec` for the largest set of accessor tests.
+  * Override any field to introduce variant shapes (gates, nodes, ledger, etc.).
+  */
+@@ -88,7 +88,7 @@ export function buildTestRepoSpec(
+ ): RepoSpec {
+   return parseRepoSpec({
+     node_id: TEST_NODE_IDS.default,
+-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
++    governance: { chain_id: String(TEST_CHAIN_ID) },
+     payments_in: {
+       credits_topup: {
+         provider: "cogni-usdc-backend-v1",
+@@ -122,7 +122,7 @@ interface RepoSpecYamlOptions {
+ export function buildTestRepoSpecYaml(opts: RepoSpecYamlOptions = {}): string {
+   const nodeId = opts.nodeId ?? TEST_NODE_IDS.operator;
+   return `node_id: "${nodeId}"
+-cogni_dao:
++governance:
+   chain_id: "${TEST_CHAIN_ID}"
+ ${opts.extra ?? ""}`;
+ }
